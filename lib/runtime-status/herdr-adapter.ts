@@ -8,6 +8,18 @@ const HERDR_BIN = process.env.HERDR_BIN || "herdr";
 
 export type HerdrCommandRunner = (args: string[], options: { timeoutMs: number }) => Promise<{ stdout: string; stderr: string }>;
 
+export async function focusHerdrAgent(agentId: string, options: {
+  run?: HerdrCommandRunner;
+  timeoutMs?: number;
+} = {}): Promise<void> {
+  const target = agentId.trim();
+  if (!target) throw new Error("Herdr agent id is required");
+
+  const run = options.run ?? runHerdr;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  await run(["agent", "focus", target], { timeoutMs });
+}
+
 export async function getHerdrStatusSnapshot(options: {
   run?: HerdrCommandRunner;
   timeoutMs?: number;

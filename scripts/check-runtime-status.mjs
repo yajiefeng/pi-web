@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { mergeRuntimeStatuses } from "../lib/runtime-status/merge.ts";
-import { getHerdrStatusSnapshot, parseHerdrAgentList } from "../lib/runtime-status/herdr-adapter.ts";
+import { focusHerdrAgent, getHerdrStatusSnapshot, parseHerdrAgentList } from "../lib/runtime-status/herdr-adapter.ts";
+import { focusHerdrAgentById } from "../lib/runtime-status/herdr-focus.ts";
+import { resolveHerdrAgentSessionId } from "../lib/runtime-status/session-binding.ts";
 
 function rpc(overrides = {}) {
   return {
@@ -150,6 +152,96 @@ function herdr(overrides = {}) {
   assert.equal(snapshot.sessions["session-from-path"]?.status, "working");
   assert.equal(snapshot.sessions["session-from-path"]?.source, "herdr");
   assert.equal(snapshot.sessions["session-from-path"]?.herdrAgentId, "agent-1");
+}
+
+{
+  const calls = [];
+  await focusHerdrAgent("term-123", {
+    timeoutMs: 42,
+    run: async (args, options) => {
+      calls.push({ args, timeoutMs: options.timeoutMs });
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  assert.deepEqual(calls, [{ args: ["agent", "focus", "term-123"], timeoutMs: 42 }]);
+}
+
+{
+  await assert.rejects(
+    () => focusHerdrAgent(" ", { run: async () => ({ stdout: "", stderr: "" }) }),
+    /agent id/i,
+  );
+}
+
+{
+  assert.equal(
+    resolveHerdrAgentSessionId(
+      herdr({ sessionId: undefined, sessionPath: "/tmp/path-session.jsonl" }),
+      [{ sessionId: "path-session", sessionFile: "/tmp/path-session.jsonl" }],
+    ),
+    "path-session",
+  );
+}
+
+{
+  assert.equal(
+    resolveHerdrAgentSessionId(herdr({ sessionId: "direct-session", sessionPath: "/tmp/ignored.jsonl" }), []),
+    "direct-session",
+  );
+}
+
+{
+  const focused = [];
+  const result = await focusHerdrAgentById({
+    agentId: "agent-1",
+    getSnapshot: async () => ({
+      health: "ok",
+      agents: [herdr({ sessionId: undefined, sessionPath: "/tmp/path-session.jsonl" })],
+    }),
+    focus: async (agentId) => { focused.push(agentId); },
+    sessionRefs: [{ sessionId: "path-session", sessionFile: "/tmp/path-session.jsonl" }],
+  });
+
+  assert.deepEqual(focused, ["agent-1"]);
+  assert.deepEqual(result, {
+    ok: true,
+    focusedAgentId: "agent-1",
+    agentLabel: "pi-main",
+    sessionId: "path-session",
+    linked: true,
+  });
+}
+
+{
+  const focused = [];
+  const result = await focusHerdrAgentById({
+    agentId: "agent-2",
+    getSnapshot: async () => ({
+      health: "ok",
+      agents: [herdr({ id: "agent-2", sessionId: undefined, sessionPath: undefined, linked: false })],
+    }),
+    focus: async (agentId) => { focused.push(agentId); },
+    sessionRefs: [],
+  });
+
+  assert.deepEqual(focused, ["agent-2"]);
+  assert.equal(result.linked, false);
+  assert.equal(result.sessionId, undefined);
+}
+
+{
+  const focused = [];
+  await assert.rejects(
+    () => focusHerdrAgentById({
+      agentId: "missing",
+      getSnapshot: async () => ({ health: "ok", agents: [herdr()] }),
+      focus: async (agentId) => { focused.push(agentId); },
+      sessionRefs: [],
+    }),
+    /not found/i,
+  );
+  assert.deepEqual(focused, []);
 }
 
 {

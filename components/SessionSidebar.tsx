@@ -49,6 +49,12 @@ function fallbackRunningStatuses(ids: string[]): Map<string, SessionRuntimeStatu
   return new Map(ids.map((id) => [id, { sessionId: id, status: "working", source: "rpc" as const }]));
 }
 
+interface HerdrFocusResponse {
+  ok?: boolean;
+  error?: string;
+  sessionId?: string;
+}
+
 function activeSessionIdsFromStatuses(statuses: Map<string, SessionRuntimeStatus>): Set<string> {
   const ids = new Set<string>();
   for (const [id, status] of statuses) {
@@ -465,6 +471,39 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
+  const handleHerdrAgentFocus = useCallback(async (agent: HerdrAgentRuntimeStatus) => {
+    const res = await fetch("/api/runtime/herdr/focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id }),
+    });
+    const data = await res.json().catch(() => ({})) as HerdrFocusResponse;
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error ?? `HTTP ${res.status}`);
+    }
+
+    if (!data.sessionId) return;
+
+    let session = allSessions.find((session) => session.id === data.sessionId);
+    if (!session) {
+      const sessionsRes = await fetch("/api/sessions");
+      if (sessionsRes.ok) {
+        const sessionsData = await sessionsRes.json() as { sessions?: SessionInfo[] };
+        if (Array.isArray(sessionsData.sessions)) {
+          setAllSessions(sessionsData.sessions);
+          session = sessionsData.sessions.find((item) => item.id === data.sessionId);
+        }
+      }
+    }
+
+    if (!session) {
+      throw new Error("Focused Herdr agent, but linked session was not found.");
+    }
+
+    setSelectedCwd(session.cwd);
+    onSelectSession(session);
+  }, [allSessions, onSelectSession]);
+
   const recentCwds = getRecentCwds(allSessions);
   const filteredSessions = selectedCwd
     ? allSessions.filter((s) => s.cwd === selectedCwd)
@@ -838,6 +877,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         health={herdrHealth}
         agents={herdrAgents}
         onToggle={() => setHerdrPanelOpen((v) => !v)}
+        onFocusAgent={handleHerdrAgentFocus}
       />
 
       {/* File Explorer section */}
@@ -936,14 +976,31 @@ function HerdrAgentsPanel({
   health,
   agents,
   onToggle,
+  onFocusAgent,
 }: {
   open: boolean;
   health: HerdrHealth;
   agents: HerdrAgentRuntimeStatus[];
   onToggle: () => void;
+  onFocusAgent: (agent: HerdrAgentRuntimeStatus) => Promise<void>;
 }) {
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
+  const [focusError, setFocusError] = useState<{ agentId: string; message: string } | null>(null);
   const healthLabel = health === "ok" ? `${agents.length} agent${agents.length === 1 ? "" : "s"}` : health === "unavailable" ? "offline" : "error";
   const healthColor = health === "ok" ? "var(--text-muted)" : health === "unavailable" ? "var(--text-dim)" : "#ef4444";
+
+  const handleFocusAgent = useCallback(async (agent: HerdrAgentRuntimeStatus) => {
+    if (pendingAgentId) return;
+    setPendingAgentId(agent.id);
+    setFocusError(null);
+    try {
+      await onFocusAgent(agent);
+    } catch (error) {
+      setFocusError({ agentId: agent.id, message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setPendingAgentId(null);
+    }
+  }, [onFocusAgent, pendingAgentId]);
 
   return (
     <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
@@ -987,7 +1044,15 @@ function HerdrAgentsPanel({
           ) : agents.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "3px 0 2px" }}>No Herdr agents found.</div>
           ) : (
-            agents.map((agent) => <HerdrAgentRow key={agent.id} agent={agent} />)
+            agents.map((agent) => (
+              <HerdrAgentRow
+                key={agent.id}
+                agent={agent}
+                pending={pendingAgentId === agent.id}
+                error={focusError?.agentId === agent.id ? focusError.message : undefined}
+                onFocus={() => void handleFocusAgent(agent)}
+              />
+            ))
           )}
         </div>
       )}
@@ -995,7 +1060,17 @@ function HerdrAgentsPanel({
   );
 }
 
-function HerdrAgentRow({ agent }: { agent: HerdrAgentRuntimeStatus }) {
+function HerdrAgentRow({
+  agent,
+  pending,
+  error,
+  onFocus,
+}: {
+  agent: HerdrAgentRuntimeStatus;
+  pending: boolean;
+  error?: string;
+  onFocus: () => void;
+}) {
   const color = agent.status === "working"
     ? "var(--accent)"
     : agent.status === "blocked"
@@ -1006,18 +1081,26 @@ function HerdrAgentRow({ agent }: { agent: HerdrAgentRuntimeStatus }) {
   const linkedText = agent.sessionId ? `linked ${agent.sessionId.slice(0, 8)}` : agent.sessionPath ? "linked by path" : "unlinked";
 
   return (
-    <div
-      title={[agent.label, agent.status, agent.cwd, agent.sessionId, agent.sessionPath, agent.message].filter(Boolean).join(" · ")}
+    <button
+      type="button"
+      onClick={onFocus}
+      disabled={pending}
+      title={["Focus Herdr agent", agent.label, agent.status, agent.cwd, agent.sessionId, agent.sessionPath, agent.message].filter(Boolean).join(" · ")}
       style={{
         display: "grid",
         gridTemplateColumns: "10px minmax(0, 1fr) auto",
         alignItems: "center",
         gap: 7,
         minWidth: 0,
+        width: "100%",
         padding: "5px 7px",
         border: "1px solid var(--border)",
         borderRadius: 7,
         background: "var(--bg)",
+        cursor: pending ? "wait" : "pointer",
+        textAlign: "left",
+        font: "inherit",
+        opacity: pending ? 0.7 : 1,
       }}
     >
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />
@@ -1025,12 +1108,12 @@ function HerdrAgentRow({ agent }: { agent: HerdrAgentRuntimeStatus }) {
         {agent.label}
       </span>
       <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-        {agent.status}
+        {pending ? "focus…" : agent.status}
       </span>
-      <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 11 }}>
-        {linkedText}{agent.cwd ? ` · ${agent.cwd}` : ""}
+      <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: error ? "#ef4444" : "var(--text-dim)", fontSize: 11 }}>
+        {error ?? `${linkedText}${agent.cwd ? ` · ${agent.cwd}` : ""}`}
       </span>
-    </div>
+    </button>
   );
 }
 
