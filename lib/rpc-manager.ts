@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { cacheSessionPath } from "./session-reader";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
+import type { RpcSessionRuntimeStatus } from "./runtime-status/types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
 
 // ============================================================================
@@ -841,6 +842,21 @@ export function getRunningRpcSessionIds(): string[] {
     if (session.isRunning()) ids.add(session.sessionId || sessionId);
   }
   return [...ids];
+}
+
+export function getRpcSessionStatusSnapshot(): RpcSessionRuntimeStatus[] {
+  const statuses: RpcSessionRuntimeStatus[] = [];
+  for (const [sessionId, session] of getRegistry()) {
+    if (!session.isAlive()) continue;
+    const realSessionId = session.sessionId || sessionId;
+    statuses.push({
+      sessionId: realSessionId,
+      ...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
+      status: session.isRunning() ? "working" : "idle",
+      source: "rpc",
+    });
+  }
+  return statuses;
 }
 
 // ----------------------------------------------------------------------------

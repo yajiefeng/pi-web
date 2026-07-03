@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import type { HerdrAgentRuntimeStatus, HerdrHealth, SessionRuntimeStatus, RuntimeStatusSnapshot } from "@/lib/runtime-status/types";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer } from "./FileExplorer";
 
@@ -42,6 +43,18 @@ function saveUnreadSessionIds(ids: Set<string>): void {
   } catch {
     // ignore storage quota / privacy-mode errors
   }
+}
+
+function fallbackRunningStatuses(ids: string[]): Map<string, SessionRuntimeStatus> {
+  return new Map(ids.map((id) => [id, { sessionId: id, status: "working", source: "rpc" as const }]));
+}
+
+function activeSessionIdsFromStatuses(statuses: Map<string, SessionRuntimeStatus>): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, status] of statuses) {
+    if (status.status === "working" || status.status === "blocked") ids.add(id);
+  }
+  return ids;
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -238,11 +251,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerKey, setExplorerKey] = useState(0);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
-  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [sessionStatuses, setSessionStatuses] = useState<Map<string, SessionRuntimeStatus>>(() => new Map());
+  const [herdrAgents, setHerdrAgents] = useState<HerdrAgentRuntimeStatus[]>([]);
+  const [herdrHealth, setHerdrHealth] = useState<HerdrHealth>("unavailable");
+  const [herdrPanelOpen, setHerdrPanelOpen] = useState(false);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
-  const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
+  const previousActiveSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
-  // running state; late /api/sessions responses must not overwrite it.
+  // runtime state; late /api/sessions responses must not overwrite it.
   const sseAuthoritativeRef = useRef(false);
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,7 +273,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
       if (!sseAuthoritativeRef.current) {
-        setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        setSessionStatuses(fallbackRunningStatuses(data.runningSessionIds ?? []));
       }
       // Drop unread markers for sessions that no longer exist (e.g. deleted).
       const existingIds = new Set(data.sessions.map((s) => s.id));
@@ -293,16 +309,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [unreadSessionIds]);
 
   useEffect(() => {
-    // Live running status via SSE — no polling. The server pushes the current
-    // set of running session ids whenever any session starts/stops working.
-    const source = new EventSource("/api/agent/running/events");
+    // Live runtime status via SSE. The server combines pi-web RPC state with
+    // optional Herdr agent/pane state and pushes a full status snapshot.
+    const source = new EventSource("/api/runtime/status/events");
 
     source.onmessage = (e) => {
       try {
-        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[] };
-        if (data.type === "running") {
+        const data = JSON.parse(e.data) as { type?: string; snapshot?: RuntimeStatusSnapshot };
+        if (data.type === "runtime_status" && data.snapshot) {
           sseAuthoritativeRef.current = true;
-          setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+          setSessionStatuses(new Map(Object.entries(data.snapshot.sessions)));
+          setHerdrAgents(data.snapshot.herdrAgents);
+          setHerdrHealth(data.snapshot.health.herdr);
         }
       } catch {
         // ignore malformed frames
@@ -314,21 +332,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, []);
 
   useEffect(() => {
-    const previous = previousRunningSessionIdsRef.current;
-    const completedInBackground = [...previous].filter((id) => !runningSessionIds.has(id) && id !== selectedSessionId);
-    const newlyRunning = [...runningSessionIds];
+    const previous = previousActiveSessionIdsRef.current;
+    const activeSessionIds = activeSessionIdsFromStatuses(sessionStatuses);
+    const completedInBackground = [...previous].filter((id) => !activeSessionIds.has(id) && id !== selectedSessionId);
+    const newlyActive = [...activeSessionIds];
 
-    if (completedInBackground.length > 0 || newlyRunning.length > 0) {
+    if (completedInBackground.length > 0 || newlyActive.length > 0) {
       setUnreadSessionIds((prev) => {
         const next = new Set(prev);
-        newlyRunning.forEach((id) => next.delete(id));
+        newlyActive.forEach((id) => next.delete(id));
         completedInBackground.forEach((id) => next.add(id));
         return next;
       });
     }
 
-    previousRunningSessionIdsRef.current = runningSessionIds;
-  }, [runningSessionIds, selectedSessionId]);
+    previousActiveSessionIdsRef.current = activeSessionIds;
+  }, [sessionStatuses, selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
@@ -801,7 +820,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             key={node.session.id}
             node={node}
             selectedSessionId={selectedSessionId}
-            runningSessionIds={runningSessionIds}
+            sessionStatuses={sessionStatuses}
             unreadSessionIds={unreadSessionIds}
             onSelectSession={onSelectSession}
             onRenamed={loadSessions}
@@ -813,6 +832,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           />
         ))}
       </div>
+
+      <HerdrAgentsPanel
+        open={herdrPanelOpen}
+        health={herdrHealth}
+        agents={herdrAgents}
+        onToggle={() => setHerdrPanelOpen((v) => !v)}
+      />
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -905,10 +931,113 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
+function HerdrAgentsPanel({
+  open,
+  health,
+  agents,
+  onToggle,
+}: {
+  open: boolean;
+  health: HerdrHealth;
+  agents: HerdrAgentRuntimeStatus[];
+  onToggle: () => void;
+}) {
+  const healthLabel = health === "ok" ? `${agents.length} agent${agents.length === 1 ? "" : "s"}` : health === "unavailable" ? "offline" : "error";
+  const healthColor = health === "ok" ? "var(--text-muted)" : health === "unavailable" ? "var(--text-dim)" : "#ef4444";
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
+      <button
+        onClick={onToggle}
+        title={health === "ok" ? "Show Herdr agents" : "Herdr status"}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          padding: "6px 10px",
+          background: "none",
+          border: "none",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          textAlign: "left",
+        }}
+      >
+        <svg
+          width="9" height="9" viewBox="0 0 10 10" fill="none"
+          stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+          style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+        >
+          <polyline points="3 2 7 5 3 8" />
+        </svg>
+        <span style={{ flex: 1 }}>Herdr</span>
+        <span style={{ color: healthColor, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>{healthLabel}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 10px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
+          {health !== "ok" ? (
+            <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "3px 0 2px" }}>
+              {health === "unavailable" ? "Herdr server is not running." : "Unable to read Herdr status."}
+            </div>
+          ) : agents.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "3px 0 2px" }}>No Herdr agents found.</div>
+          ) : (
+            agents.map((agent) => <HerdrAgentRow key={agent.id} agent={agent} />)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HerdrAgentRow({ agent }: { agent: HerdrAgentRuntimeStatus }) {
+  const color = agent.status === "working"
+    ? "var(--accent)"
+    : agent.status === "blocked"
+      ? "#d97706"
+      : agent.status === "idle"
+        ? "#10b981"
+        : "var(--text-dim)";
+  const linkedText = agent.sessionId ? `linked ${agent.sessionId.slice(0, 8)}` : agent.sessionPath ? "linked by path" : "unlinked";
+
+  return (
+    <div
+      title={[agent.label, agent.status, agent.cwd, agent.sessionId, agent.sessionPath, agent.message].filter(Boolean).join(" · ")}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "10px minmax(0, 1fr) auto",
+        alignItems: "center",
+        gap: 7,
+        minWidth: 0,
+        padding: "5px 7px",
+        border: "1px solid var(--border)",
+        borderRadius: 7,
+        background: "var(--bg)",
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontSize: 12 }}>
+        {agent.label}
+      </span>
+      <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+        {agent.status}
+      </span>
+      <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 11 }}>
+        {linkedText}{agent.cwd ? ` · ${agent.cwd}` : ""}
+      </span>
+    </div>
+  );
+}
+
 function SessionTreeItem({
   node,
   selectedSessionId,
-  runningSessionIds,
+  sessionStatuses,
   unreadSessionIds,
   onSelectSession,
   onRenamed,
@@ -917,7 +1046,7 @@ function SessionTreeItem({
 }: {
   node: SessionTreeNode;
   selectedSessionId: string | null;
-  runningSessionIds: Set<string>;
+  sessionStatuses: Map<string, SessionRuntimeStatus>;
   unreadSessionIds: Set<string>;
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
@@ -944,7 +1073,7 @@ function SessionTreeItem({
         <SessionItem
           session={node.session}
           isSelected={node.session.id === selectedSessionId}
-          isRunning={runningSessionIds.has(node.session.id)}
+          runtimeStatus={sessionStatuses.get(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
@@ -962,7 +1091,7 @@ function SessionTreeItem({
               key={child.session.id}
               node={child}
               selectedSessionId={selectedSessionId}
-              runningSessionIds={runningSessionIds}
+              sessionStatuses={sessionStatuses}
               unreadSessionIds={unreadSessionIds}
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
@@ -973,6 +1102,31 @@ function SessionTreeItem({
         </div>
       )}
     </div>
+  );
+}
+
+function BlockedSessionIndicator() {
+  return (
+    <span
+      title="Agent blocked"
+      aria-label="Agent blocked"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#d97706",
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={{ display: "block" }}>
+        <path d="M7 1.6 12.4 11H1.6L7 1.6Z" fill="currentColor" opacity="0.18" />
+        <path d="M7 1.6 12.4 11H1.6L7 1.6Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+        <path d="M7 5v2.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="7" cy="9.2" r="0.7" fill="currentColor" />
+      </svg>
+    </span>
   );
 }
 
@@ -1042,7 +1196,7 @@ function UnreadSessionIndicator() {
 function SessionItem({
   session,
   isSelected,
-  isRunning,
+  runtimeStatus,
   isUnread,
   onClick,
   onRenamed,
@@ -1054,7 +1208,7 @@ function SessionItem({
 }: {
   session: SessionInfo;
   isSelected: boolean;
-  isRunning?: boolean;
+  runtimeStatus?: SessionRuntimeStatus;
   isUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
@@ -1072,6 +1226,15 @@ function SessionItem({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
+  const isRunning = runtimeStatus?.status === "working";
+  const isBlocked = runtimeStatus?.status === "blocked";
+  const statusTitle = isBlocked
+    ? `${title} · Agent blocked${runtimeStatus?.message ? `: ${runtimeStatus.message}` : ""}`
+    : isRunning
+      ? `${title} · Agent running…`
+      : isUnread
+        ? `${title} · New activity`
+        : title;
 
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1234,9 +1397,9 @@ function SessionItem({
                 lineHeight: 1.4,
                 color: "var(--text)",
               }}
-              title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
+              title={statusTitle}
             >
-              {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
+              {isBlocked ? <BlockedSessionIndicator /> : isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
