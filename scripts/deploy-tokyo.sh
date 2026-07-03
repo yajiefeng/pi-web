@@ -78,7 +78,9 @@ rsync -a --delete \
   "$ROOT/.next/" "$stage/.next/"
 
 rm -rf "$stage/node_modules" "$stage/.next/cache" "$stage/.next/dev"
-tar -C "$stage" -czf "$archive" .
+rm -f "$stage/package-lock.json" "$stage/bun.lock"
+find "$stage" \( -name '._*' -o -name '.DS_Store' \) -delete
+COPYFILE_DISABLE=1 tar -C "$stage" -czf "$archive" .
 
 remote_archive="/tmp/pi-web-runtime-$(date -u +%Y%m%dT%H%M%SZ)-$$.tgz"
 scp "$archive" "$SSH_TARGET:$remote_archive"
