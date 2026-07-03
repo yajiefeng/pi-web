@@ -9,7 +9,36 @@ This fork is the Tokyo VPS working copy for `home.voiduplink.com`.
 
 Keep local changes in this fork and periodically pull upstream changes from `agegr/pi-web`.
 
+## Source Locations
+
+Primary editing copy on the Tokyo VPS:
+
+```text
+/srv/codex-workspaces/pi-web
+```
+
+Local Mac mirror:
+
+```text
+/Users/fengyajie/github/pi-web
+```
+
+The VPS clone runs as `codex-agent` and uses a repo-scoped GitHub deploy key with write access to `yajiefeng/pi-web`. Do not place personal GitHub keys on the VPS.
+
 ## Local Development
+
+On the VPS:
+
+```bash
+ssh dmit-tyo-tiny
+cd /srv/codex-workspaces/pi-web
+git status
+git add .
+git commit -m "..."
+git push origin main
+```
+
+On the Mac:
 
 ```bash
 npm ci
@@ -35,7 +64,15 @@ The deployed service is:
 - public URL: `https://home.voiduplink.com/`
 - local service URL on VPS: `http://127.0.0.1:30141/`
 
-Deploy the committed working tree:
+Deploy from the Mac mirror after pulling the latest GitHub changes:
+
+```bash
+cd /Users/fengyajie/github/pi-web
+git pull --ff-only origin main
+scripts/deploy-tokyo.sh
+```
+
+Deploy the committed local working tree:
 
 ```bash
 scripts/deploy-tokyo.sh
@@ -51,11 +88,12 @@ PI_WEB_ALLOW_DIRTY=1 scripts/deploy-tokyo.sh
 
 Use dirty deploy sparingly. The normal loop should be:
 
-1. Edit locally.
-2. Verify locally.
-3. Commit.
-4. Deploy.
-5. Push to GitHub.
+1. Edit on the VPS repo.
+2. Commit and push from the VPS.
+3. Pull the Mac mirror.
+4. Build and deploy from the Mac mirror.
+
+The deploy build currently runs on the Mac because the Tokyo VPS is a 1 GB machine and full npm installs/builds are expensive there. Revisit this if we add a lighter VPS-native build path.
 
 ## Rollback
 
