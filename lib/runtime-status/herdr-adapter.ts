@@ -70,13 +70,18 @@ function parseJsonAgentList(text: string): HerdrAgentRuntimeStatus[] | null {
   if (!text.startsWith("{") && !text.startsWith("[")) return null;
   try {
     const data = JSON.parse(text) as unknown;
-    const records = Array.isArray(data)
-      ? data
-      : isRecord(data) && Array.isArray(data.agents)
-        ? data.agents
-        : isRecord(data) && Array.isArray(data.panes)
-          ? data.panes
-          : null;
+    const result = isRecord(data) && isRecord(data.result) ? data.result : data;
+    const records = Array.isArray(result)
+      ? result
+      : isRecord(result) && Array.isArray(result.agents)
+        ? result.agents
+        : isRecord(result) && Array.isArray(result.panes)
+          ? result.panes
+          : isRecord(result) && isRecord(result.agent)
+            ? [result.agent]
+            : isRecord(result) && isRecord(result.pane)
+              ? [result.pane]
+              : null;
     if (!records) return null;
     return records
       .map((record, index) => normalizeJsonAgent(record, index))
@@ -88,7 +93,7 @@ function parseJsonAgentList(text: string): HerdrAgentRuntimeStatus[] | null {
 
 function normalizeJsonAgent(record: unknown, index: number): HerdrAgentRuntimeStatus | null {
   if (!isRecord(record)) return null;
-  const status = normalizeStatus(readString(record, "status") ?? readString(record, "state"));
+  const status = normalizeStatus(readString(record, "status") ?? readString(record, "state") ?? readString(record, "agent_status"));
   const id = readString(record, "id")
     ?? readString(record, "terminalId")
     ?? readString(record, "terminal_id")
@@ -99,6 +104,7 @@ function normalizeJsonAgent(record: unknown, index: number): HerdrAgentRuntimeSt
     ?? readString(record, "name")
     ?? readString(record, "agent")
     ?? readString(record, "displayAgent")
+    ?? readString(record, "display_agent")
     ?? id;
   const sessionId = readString(record, "agentSessionId") ?? readString(record, "agent_session_id") ?? readString(record, "agent-session-id") ?? readString(record, "sessionId") ?? readString(record, "session_id");
   const sessionPath = readString(record, "agentSessionPath") ?? readString(record, "agent_session_path") ?? readString(record, "agent-session-path") ?? readString(record, "sessionPath") ?? readString(record, "session_path");
@@ -114,7 +120,7 @@ function normalizeJsonAgent(record: unknown, index: number): HerdrAgentRuntimeSt
     ...(readString(record, "cwd") ? { cwd: readString(record, "cwd") } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(sessionPath ? { sessionPath } : {}),
-    ...(readString(record, "message") ? { message: readString(record, "message") } : {}),
+    ...(readString(record, "message") || readString(record, "custom_status") || readString(record, "customStatus") ? { message: readString(record, "message") ?? readString(record, "custom_status") ?? readString(record, "customStatus") } : {}),
   };
 }
 

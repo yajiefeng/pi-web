@@ -82,6 +82,34 @@ function herdr(overrides = {}) {
 }
 
 {
+  const agents = parseHerdrAgentList(JSON.stringify({
+    id: "cli:agent:list",
+    result: {
+      type: "agent_list",
+      agents: [{
+        agent_status: "unknown",
+        cwd: "/Users/fengyajie/agent-lab/bellwether-demo",
+        focused: true,
+        foreground_cwd: "/Users/fengyajie/agent-lab/bellwether-demo",
+        name: "aggregator",
+        pane_id: "w5:p1",
+        revision: 0,
+        tab_id: "w5:t1",
+        terminal_id: "term_655acfbdcd4f41",
+        workspace_id: "w5",
+      }],
+    },
+  }));
+
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0]?.id, "term_655acfbdcd4f41");
+  assert.equal(agents[0]?.label, "aggregator");
+  assert.equal(agents[0]?.status, "unknown");
+  assert.equal(agents[0]?.paneId, "w5:p1");
+  assert.equal(agents[0]?.linked, false);
+}
+
+{
   const snapshot = await getHerdrStatusSnapshot({
     run: async () => {
       throw new Error("Error: Os { code: 61, kind: ConnectionRefused, message: \"Connection refused\" }");
