@@ -12,6 +12,19 @@ Lint: `npm run lint`
 
 ---
 
+## Privacy & PR Hygiene
+
+Do **not** commit or push private deployment details, including:
+
+- personal domains, hostnames, SSH aliases, machine names, or server IPs
+- Cloudflare/Caddy/tunnel configs, LaunchAgent/systemd service details, VPS paths, or deploy scripts
+- `.env*`, tokens, API keys, passwords, auth files, or session transcripts
+- personal workflow docs/scripts that are not intended for the upstream project
+
+Before committing, search for sensitive terms and review `git diff --cached`. For upstream PRs, create a clean branch from `upstream/main` and cherry-pick only public, project-relevant commits; never open a PR directly from a fork branch that contains private deployment/workflow commits.
+
+---
+
 ## Architecture
 
 ```
