@@ -571,7 +571,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const displayModelName = model
     ? (modelOptions.find((o) => o.modelId === model.modelId && o.provider === model.provider)?.name ?? model.modelId)
     : null;
-  const currentName = displayModelName;
+  const currentName = displayModelName ?? (modelOptions.length > 0 ? "Select model" : null);
 
   const compactSavedTokens = compactResult
     ? Math.max(0, compactResult.tokensBefore - compactResult.estimatedTokensAfter)
