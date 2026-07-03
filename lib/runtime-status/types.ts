@@ -25,6 +25,11 @@ export interface HerdrAgentRuntimeStatus {
   raw?: string;
 }
 
+export interface SessionRuntimeReference {
+  sessionId: string;
+  sessionFile?: string;
+}
+
 export interface SessionRuntimeStatus {
   sessionId: string;
   sessionFile?: string;

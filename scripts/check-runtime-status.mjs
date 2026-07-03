@@ -110,6 +110,49 @@ function herdr(overrides = {}) {
 }
 
 {
+  const sessionPath = "/Users/fengyajie/.pi/agent/sessions/--Users-fengyajie-github-pi-web-agegr--/2026-07-03T04-22-18-183Z_019f2636-9146-760e-b6b5-c711aa706871.jsonl";
+  const agents = parseHerdrAgentList(JSON.stringify({
+    id: "cli:agent:list",
+    result: {
+      type: "agent_list",
+      agents: [{
+        agent: "pi",
+        agent_session: {
+          agent: "pi",
+          kind: "path",
+          source: "herdr:pi",
+          value: sessionPath,
+        },
+        agent_status: "idle",
+        cwd: "/Users/fengyajie/github/pi-web-agegr",
+        name: "pi-e2e",
+        pane_id: "w5:pK",
+        terminal_id: "term_655ad45200bd92",
+      }],
+    },
+  }));
+
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0]?.status, "idle");
+  assert.equal(agents[0]?.sessionPath, sessionPath);
+  assert.equal(agents[0]?.linked, true);
+}
+
+{
+  const sessionPath = "/tmp/session-from-path.jsonl";
+  const snapshot = mergeRuntimeStatuses({
+    rpcSessions: [],
+    sessionRefs: [{ sessionId: "session-from-path", sessionFile: sessionPath }],
+    herdrAgents: [herdr({ sessionId: undefined, sessionPath, status: "working" })],
+    herdrHealth: "ok",
+  });
+
+  assert.equal(snapshot.sessions["session-from-path"]?.status, "working");
+  assert.equal(snapshot.sessions["session-from-path"]?.source, "herdr");
+  assert.equal(snapshot.sessions["session-from-path"]?.herdrAgentId, "agent-1");
+}
+
+{
   const snapshot = await getHerdrStatusSnapshot({
     run: async () => {
       throw new Error("Error: Os { code: 61, kind: ConnectionRefused, message: \"Connection refused\" }");

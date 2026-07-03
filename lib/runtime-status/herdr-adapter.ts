@@ -106,8 +106,9 @@ function normalizeJsonAgent(record: unknown, index: number): HerdrAgentRuntimeSt
     ?? readString(record, "displayAgent")
     ?? readString(record, "display_agent")
     ?? id;
-  const sessionId = readString(record, "agentSessionId") ?? readString(record, "agent_session_id") ?? readString(record, "agent-session-id") ?? readString(record, "sessionId") ?? readString(record, "session_id");
-  const sessionPath = readString(record, "agentSessionPath") ?? readString(record, "agent_session_path") ?? readString(record, "agent-session-path") ?? readString(record, "sessionPath") ?? readString(record, "session_path");
+  const nestedSession = readAgentSessionRef(record);
+  const sessionId = readString(record, "agentSessionId") ?? readString(record, "agent_session_id") ?? readString(record, "agent-session-id") ?? readString(record, "sessionId") ?? readString(record, "session_id") ?? nestedSession.sessionId;
+  const sessionPath = readString(record, "agentSessionPath") ?? readString(record, "agent_session_path") ?? readString(record, "agent-session-path") ?? readString(record, "sessionPath") ?? readString(record, "session_path") ?? nestedSession.sessionPath;
 
   return {
     id,
@@ -152,6 +153,19 @@ function parseAgentLine(line: string): HerdrAgentRuntimeStatus | null {
     ...(values.message || values.custom_status || values.customStatus ? { message: values.message ?? values.custom_status ?? values.customStatus } : {}),
     raw: line,
   };
+}
+
+function readAgentSessionRef(record: Record<string, unknown>): { sessionId?: string; sessionPath?: string } {
+  const agentSession = record["agent_session"] ?? record.agentSession;
+  if (!isRecord(agentSession)) return {};
+
+  const kind = readString(agentSession, "kind");
+  const value = readString(agentSession, "value");
+  if (!value) return {};
+
+  if (kind === "id") return { sessionId: value };
+  if (kind === "path") return { sessionPath: value };
+  return {};
 }
 
 function readKeyValues(line: string): Record<string, string> {
