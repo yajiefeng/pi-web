@@ -29,6 +29,7 @@
     "build": "next build --webpack",
     "start": "next start -p 30141",
     "lint": "eslint .",
+    "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
