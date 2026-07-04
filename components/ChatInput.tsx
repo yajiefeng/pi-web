@@ -171,6 +171,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [voiceRecording, setVoiceRecording] = useState<VoiceRecording | null>(null);
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
   const [voiceInputError, setVoiceInputError] = useState<string | null>(null);
+  const [useNativeAudioCapture, setUseNativeAudioCapture] = useState(false);
   const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
 
@@ -194,6 +195,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   attachedImagesRef.current = attachedImages;
 
   const isVoiceBusy = voiceRecording !== null || isTranscribingVoice;
+  const shouldUseNativeAudioCapture = useNativeAudioCapture || !voiceInputSupported;
   const voiceInputStatus = getVoiceInputStatus({
     phase: voiceRecording ? "recording" : isTranscribingVoice ? "transcribing" : "idle",
     elapsedSeconds: recordingElapsedSeconds,
@@ -411,11 +413,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     try {
       const recording = await startVoiceRecording();
       voiceRecordingRef.current = recording;
+      setUseNativeAudioCapture(false);
       setRecordingElapsedSeconds(0);
       setRecordingStartedAtMs(Date.now());
       setVoiceRecording(recording);
     } catch (error) {
-      setVoiceInputError(normalizeVoiceInputError(error));
+      const message = normalizeVoiceInputError(error);
+      if (/not supported/i.test(message)) {
+        setUseNativeAudioCapture(true);
+        audioInputRef.current?.click();
+        setVoiceInputError("Inline recording is not supported in this browser. Choose or record an audio file instead.");
+        return;
+      }
+      setVoiceInputError(message);
     }
   }, [isStreaming, isTranscribingVoice]);
 
@@ -424,12 +434,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       void stopVoiceInput();
       return;
     }
-    if (!voiceInputSupported) {
+    if (shouldUseNativeAudioCapture) {
       audioInputRef.current?.click();
       return;
     }
     void startVoiceInput();
-  }, [startVoiceInput, stopVoiceInput, voiceInputSupported]);
+  }, [shouldUseNativeAudioCapture, startVoiceInput, stopVoiceInput]);
 
   useEffect(() => {
     if (!voiceRecording || isTranscribingVoice) return;
@@ -821,8 +831,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <button
                 type="button"
                 onClick={() => {
-                  if (voiceInputSupported) void startVoiceInput();
-                  else audioInputRef.current?.click();
+                  if (shouldUseNativeAudioCapture) audioInputRef.current?.click();
+                  else void startVoiceInput();
                 }}
                 style={{
                   flexShrink: 0,
@@ -836,7 +846,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   fontWeight: 650,
                 }}
               >
-                Try again
+                {shouldUseNativeAudioCapture ? "Choose audio" : "Try again"}
               </button>
             )}
           </div>
@@ -1167,8 +1177,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 type="button"
                 onClick={handleVoiceInputClick}
                 disabled={isTranscribingVoice}
-                title={voiceRecording ? "Stop voice recording" : voiceInputSupported ? "Voice input" : "Select or record audio"}
-                aria-label={voiceRecording ? "Stop voice recording" : voiceInputSupported ? "Start voice recording" : "Select or record audio"}
+                title={voiceRecording ? "Stop voice recording" : shouldUseNativeAudioCapture ? "Select or record audio" : "Voice input"}
+                aria-label={voiceRecording ? "Stop voice recording" : shouldUseNativeAudioCapture ? "Select or record audio" : "Start voice recording"}
                   style={{
                     flexShrink: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
