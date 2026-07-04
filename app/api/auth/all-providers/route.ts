@@ -8,10 +8,10 @@ const OAUTH_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex
 const EXTRA_API_KEY_PROVIDERS = [
   {
     id: "volcengine-ark",
-    displayName: "Volcengine Ark / Doubao ASR",
+    displayName: "Volcengine Agent Plan / Doubao ASR",
     modelCount: 0,
     description: "Used by voice input transcription with doubao-seed-asr-2.0.",
-    placeholder: "Ark API Key",
+    placeholder: "Agent Plan API Key",
   },
 ] as const;
 

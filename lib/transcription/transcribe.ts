@@ -1,15 +1,32 @@
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  transcribeWithVolcengineAgentPlan,
+  VOLCENGINE_AGENT_PLAN_DEFAULT_RESOURCE_ID,
+  VOLCENGINE_AGENT_PLAN_DEFAULT_WS_URL,
+} from "./volcengine-agent-plan.ts";
 
 type AuthStorageInstance = ReturnType<typeof AuthStorage.create>;
 type ModelRegistryInstance = ReturnType<typeof ModelRegistry.create>;
 
-type TranscriptionProvider = {
-  id: "volcengine-ark" | "openai";
+type VolcengineAgentPlanProvider = {
+  id: "volcengine-ark";
+  kind: "volcengine-agent-plan";
+  displayName: string;
+  endpoint: string;
+  resourceId: string;
+  apiKey: string;
+};
+
+type OpenAITranscriptionProvider = {
+  id: "openai";
+  kind: "openai";
   displayName: string;
   endpoint: string;
   model: string;
   apiKey: string;
 };
+
+type TranscriptionProvider = VolcengineAgentPlanProvider | OpenAITranscriptionProvider;
 
 type ResolveTranscriptionProviderOptions = {
   authStorage?: AuthStorageInstance;
@@ -17,9 +34,12 @@ type ResolveTranscriptionProviderOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-const ARK_PROVIDER_IDS = ["volcengine-ark", "ark", "doubao"] as const;
-const ARK_DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const ARK_DEFAULT_MODEL = "doubao-seed-asr-2.0";
+const VOLCENGINE_AGENT_PLAN_PROVIDER_IDS = [
+  "volcengine-ark",
+  "volcengine-agent-plan",
+  "ark",
+  "doubao",
+] as const;
 const OPENAI_TRANSCRIPTION_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
 const OPENAI_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 
@@ -35,16 +55,16 @@ function getEnvValue(env: NodeJS.ProcessEnv, names: string[]): string | undefine
   return undefined;
 }
 
-function getArkBaseUrl(env: NodeJS.ProcessEnv): string {
+function getVolcengineAgentPlanEndpoint(env: NodeJS.ProcessEnv): string {
   return trimTrailingSlash(
-    getEnvValue(env, ["VOLCENGINE_ARK_BASE_URL", "ARK_BASE_URL"])
-      ?? ARK_DEFAULT_BASE_URL,
+    getEnvValue(env, ["VOLCENGINE_ASR_WS_URL", "VOLCENGINE_AGENT_PLAN_ASR_WS_URL"])
+      ?? VOLCENGINE_AGENT_PLAN_DEFAULT_WS_URL,
   );
 }
 
-function getArkModel(env: NodeJS.ProcessEnv): string {
-  return getEnvValue(env, ["VOLCENGINE_ARK_ASR_MODEL", "ARK_ASR_MODEL"])
-    ?? ARK_DEFAULT_MODEL;
+function getVolcengineAgentPlanResourceId(env: NodeJS.ProcessEnv): string {
+  return getEnvValue(env, ["VOLCENGINE_ASR_RESOURCE_ID", "VOLCENGINE_AGENT_PLAN_ASR_RESOURCE_ID"])
+    ?? VOLCENGINE_AGENT_PLAN_DEFAULT_RESOURCE_ID;
 }
 
 async function getProviderApiKey(
@@ -65,16 +85,21 @@ export async function resolveTranscriptionProvider(
   const authStorage = options.authStorage ?? AuthStorage.create();
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage);
 
-  const arkApiKey = getEnvValue(env, ["VOLCENGINE_ARK_API_KEY", "ARK_API_KEY"])
-    ?? await getProviderApiKey(ARK_PROVIDER_IDS, modelRegistry);
+  const volcengineAgentPlanApiKey = getEnvValue(env, [
+    "VOLCENGINE_AGENT_PLAN_API_KEY",
+    "VOLCENGINE_ASR_API_KEY",
+    "VOLCENGINE_ARK_API_KEY",
+    "ARK_API_KEY",
+  ]) ?? await getProviderApiKey(VOLCENGINE_AGENT_PLAN_PROVIDER_IDS, modelRegistry);
 
-  if (arkApiKey) {
+  if (volcengineAgentPlanApiKey) {
     return {
       id: "volcengine-ark",
-      displayName: "Volcengine Ark Doubao ASR",
-      endpoint: `${getArkBaseUrl(env)}/audio/transcriptions`,
-      model: getArkModel(env),
-      apiKey: arkApiKey,
+      kind: "volcengine-agent-plan",
+      displayName: "Volcengine Agent Plan Doubao ASR",
+      endpoint: getVolcengineAgentPlanEndpoint(env),
+      resourceId: getVolcengineAgentPlanResourceId(env),
+      apiKey: volcengineAgentPlanApiKey,
     };
   }
 
@@ -82,6 +107,7 @@ export async function resolveTranscriptionProvider(
   if (openAIApiKey?.trim()) {
     return {
       id: "openai",
+      kind: "openai",
       displayName: "OpenAI transcription",
       endpoint: OPENAI_TRANSCRIPTION_ENDPOINT,
       model: OPENAI_TRANSCRIPTION_MODEL,
@@ -96,9 +122,30 @@ export async function transcribeAudioFile(audio: File): Promise<string> {
   const provider = await resolveTranscriptionProvider();
   if (!provider) {
     throw Object.assign(
-      new Error("No transcription API key configured. Configure Volcengine Ark/Doubao or OpenAI for voice input."),
+      new Error("No transcription API key configured. Configure Volcengine Agent Plan/Doubao or OpenAI for voice input."),
       { status: 400 },
     );
+  }
+
+  if (provider.kind === "volcengine-agent-plan") {
+    try {
+      const text = await transcribeWithVolcengineAgentPlan(audio, provider);
+      if (!text) {
+        throw Object.assign(new Error("Transcription returned no text"), { status: 422 });
+      }
+      return text;
+    } catch (error) {
+      const status = typeof error === "object" && error !== null && "status" in error
+        ? Number((error as { status?: unknown }).status)
+        : 502;
+      if (status === 422) throw error;
+
+      const details = error instanceof Error && error.message ? `: ${error.message}` : "";
+      throw Object.assign(
+        new Error(`${provider.displayName} transcription failed${details}`),
+        { status: 502 },
+      );
+    }
   }
 
   const providerForm = new FormData();

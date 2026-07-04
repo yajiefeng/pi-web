@@ -2,12 +2,22 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 
 const { POST } = await import("../app/api/transcribe/route.ts");
 const {
   MAX_TRANSCRIBE_AUDIO_BYTES,
   MAX_TRANSCRIBE_REQUEST_BYTES,
 } = await import("../lib/transcription/limits.ts");
+const { resolveTranscriptionProvider } = await import("../lib/transcription/transcribe.ts");
+const {
+  buildAudioOnlyRequest,
+  buildFullClientRequest,
+  extractAsrText,
+  parseAsrResponse,
+  VOLCENGINE_AGENT_PLAN_DEFAULT_RESOURCE_ID,
+  VOLCENGINE_AGENT_PLAN_DEFAULT_WS_URL,
+} = await import("../lib/transcription/volcengine-agent-plan.ts");
 
 function formRequest(form) {
   return new Request("http://localhost/api/transcribe", {
@@ -24,11 +34,13 @@ function audioForm() {
 
 const TRANSCRIPTION_ENV_KEYS = [
   "ARK_API_KEY",
+  "VOLCENGINE_AGENT_PLAN_API_KEY",
+  "VOLCENGINE_AGENT_PLAN_ASR_RESOURCE_ID",
+  "VOLCENGINE_AGENT_PLAN_ASR_WS_URL",
+  "VOLCENGINE_ASR_API_KEY",
+  "VOLCENGINE_ASR_RESOURCE_ID",
+  "VOLCENGINE_ASR_WS_URL",
   "VOLCENGINE_ARK_API_KEY",
-  "ARK_BASE_URL",
-  "VOLCENGINE_ARK_BASE_URL",
-  "ARK_ASR_MODEL",
-  "VOLCENGINE_ARK_ASR_MODEL",
   "OPENAI_API_KEY",
 ];
 
@@ -93,61 +105,54 @@ await withTempAgentDir(async () => {
 });
 
 await withTempAgentDir(async () => {
-  const originalFetch = globalThis.fetch;
-  const calls = [];
+  const provider = await resolveTranscriptionProvider();
 
-  globalThis.fetch = async (url, init = {}) => {
-    calls.push({ url, init });
-
-    assert.equal(String(url), "https://ark.cn-beijing.volces.com/api/v3/audio/transcriptions");
-    assert.equal(init.method, "POST");
-    assert.equal(init.headers.Authorization, "Bearer test-ark-key");
-    assert.ok(init.body instanceof FormData);
-    assert.ok(init.body.get("file") instanceof File);
-    assert.equal(init.body.get("model"), "doubao-seed-asr-2.0");
-
-    return new Response(JSON.stringify({ text: "hello from doubao" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  };
-
-  try {
-    const response = await POST(formRequest(audioForm()));
-    const body = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(body, { text: "hello from doubao" });
-    assert.equal(calls.length, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}, {}, { ARK_API_KEY: "test-ark-key" });
+  assert.equal(provider.kind, "volcengine-agent-plan");
+  assert.equal(provider.endpoint, VOLCENGINE_AGENT_PLAN_DEFAULT_WS_URL);
+  assert.equal(provider.resourceId, VOLCENGINE_AGENT_PLAN_DEFAULT_RESOURCE_ID);
+  assert.equal(provider.apiKey, "test-agent-plan-key");
+}, {}, { VOLCENGINE_AGENT_PLAN_API_KEY: "test-agent-plan-key" });
 
 await withTempAgentDir(async () => {
-  const originalFetch = globalThis.fetch;
+  const provider = await resolveTranscriptionProvider();
 
-  globalThis.fetch = async (url, init = {}) => {
-    assert.equal(String(url), "https://ark.cn-beijing.volces.com/api/v3/audio/transcriptions");
-    assert.equal(init.headers.Authorization, "Bearer test-ark-auth-key");
-    assert.equal(init.body.get("model"), "doubao-seed-asr-2.0");
+  assert.equal(provider.kind, "volcengine-agent-plan");
+  assert.equal(provider.endpoint, "wss://example.test/asr");
+  assert.equal(provider.resourceId, "volc.seedasr.sauc.concurrent");
+  assert.equal(provider.apiKey, "test-agent-plan-auth-key");
+}, { "volcengine-ark": { type: "api_key", key: "test-agent-plan-auth-key" } }, {
+  VOLCENGINE_ASR_RESOURCE_ID: "volc.seedasr.sauc.concurrent",
+  VOLCENGINE_ASR_WS_URL: "wss://example.test/asr",
+});
 
-    return new Response(JSON.stringify({ text: "hello from stored doubao key" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  };
+{
+  const full = buildFullClientRequest(1);
+  assert.equal(full[0], 0x11);
+  assert.equal(full[1], 0x11);
+  assert.equal(full[2], 0x11);
+  assert.equal(full.readInt32BE(4), 1);
 
-  try {
-    const response = await POST(formRequest(audioForm()));
-    const body = await response.json();
+  const lastAudio = buildAudioOnlyRequest(3, Buffer.from("abc"), true);
+  assert.equal(lastAudio[0], 0x11);
+  assert.equal(lastAudio[1], 0x23);
+  assert.equal(lastAudio[2], 0x11);
+  assert.equal(lastAudio.readInt32BE(4), -3);
+}
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(body, { text: "hello from stored doubao key" });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}, { "volcengine-ark": { type: "api_key", key: "test-ark-auth-key" } });
+{
+  const payload = gzipSync(Buffer.from(JSON.stringify({ result: { text: " hello from doubao " } })));
+  const responseBytes = Buffer.concat([
+    Buffer.from([0x11, 0x93, 0x11, 0x00]),
+    Buffer.from([0x00, 0x00, 0x00, 0x02]),
+    Buffer.from([0x00, 0x00, 0x00, payload.length]),
+    payload,
+  ]);
+  const response = parseAsrResponse(responseBytes);
+
+  assert.equal(response.messageType, 0x09);
+  assert.equal(response.isLastPackage, true);
+  assert.equal(extractAsrText(response.payloadMsg), "hello from doubao");
+}
 
 await withTempAgentDir(async () => {
   const originalFetch = globalThis.fetch;

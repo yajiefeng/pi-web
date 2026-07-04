@@ -25,8 +25,8 @@ await withTempAgentDir(async () => {
   const body = await response.json();
   const doubao = body.providers.find((provider) => provider.id === "volcengine-ark");
 
-  assert.ok(doubao, "Volcengine Ark / Doubao ASR should be available as an API key provider");
-  assert.equal(doubao.displayName, "Volcengine Ark / Doubao ASR");
+  assert.ok(doubao, "Volcengine Agent Plan / Doubao ASR should be available as an API key provider");
+  assert.equal(doubao.displayName, "Volcengine Agent Plan / Doubao ASR");
   assert.equal(doubao.configured, false);
   assert.equal(doubao.modelCount, 0);
 });

@@ -2,6 +2,7 @@ import { MAX_TRANSCRIBE_AUDIO_BYTES, MAX_TRANSCRIBE_REQUEST_BYTES } from "../../
 import { transcribeAudioFile } from "../../../lib/transcription/transcribe.ts";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function getErrorStatus(error: unknown): number {
   const status = typeof error === "object" && error !== null && "status" in error
