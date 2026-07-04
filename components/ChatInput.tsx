@@ -4,6 +4,8 @@ import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, f
 import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { appendVoiceTranscript, normalizeVoiceInputError } from "./voice-input-helpers";
+import { startVoiceRecording, supportsVoiceInput, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -165,6 +167,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   ));
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const [voiceInputSupported, setVoiceInputSupported] = useState(false);
+  const [voiceRecording, setVoiceRecording] = useState<VoiceRecording | null>(null);
+  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
+  const [voiceInputError, setVoiceInputError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -173,6 +179,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const voiceRecordingRef = useRef<VoiceRecording | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -182,6 +189,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const attachedImagesRef = useRef(attachedImages);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
+
+  const isVoiceBusy = voiceRecording !== null || isTranscribingVoice;
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -307,15 +316,82 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [value]);
 
   useEffect(() => {
+    setVoiceInputSupported(supportsVoiceInput());
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      voiceRecordingRef.current?.cancel();
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       attachedImagesRef.current.forEach(revokeImagePreview);
     };
   }, []);
 
+  const appendTranscriptToDraft = useCallback((transcript: string) => {
+    setValue((current) => appendVoiceTranscript(current, transcript));
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, []);
+
+  const stopVoiceInput = useCallback(async () => {
+    const recording = voiceRecordingRef.current;
+    if (!recording || isTranscribingVoice) return;
+
+    voiceRecordingRef.current = null;
+    setVoiceRecording(null);
+    setIsTranscribingVoice(true);
+    setVoiceInputError(null);
+
+    try {
+      const transcript = await recording.stopAndTranscribe();
+      appendTranscriptToDraft(transcript);
+    } catch (error) {
+      setVoiceInputError(normalizeVoiceInputError(error));
+    } finally {
+      setIsTranscribingVoice(false);
+    }
+  }, [appendTranscriptToDraft, isTranscribingVoice]);
+
+  const startVoiceInput = useCallback(async () => {
+    if (isStreaming || isTranscribingVoice || voiceRecordingRef.current) return;
+
+    setVoiceInputError(null);
+    setModelDropdownOpen(false);
+    setToolDropdownOpen(false);
+    setThinkingDropdownOpen(false);
+    setControlsMenuOpen(false);
+    setSlashMenuOpen(false);
+
+    try {
+      const recording = await startVoiceRecording();
+      voiceRecordingRef.current = recording;
+      setVoiceRecording(recording);
+    } catch (error) {
+      setVoiceInputError(normalizeVoiceInputError(error));
+    }
+  }, [isStreaming, isTranscribingVoice]);
+
+  const handleVoiceInputClick = useCallback(() => {
+    if (voiceRecordingRef.current) {
+      void stopVoiceInput();
+      return;
+    }
+    void startVoiceInput();
+  }, [startVoiceInput, stopVoiceInput]);
+
   const handleSend = useCallback(async () => {
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
-    if (isStreaming) return;
+    if (isStreaming || isVoiceBusy) return;
     if (!attachedImages.length && msg.startsWith("/") && onBuiltinCommand) {
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
@@ -325,7 +401,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     }
     onSend(msg, attachedImages.length ? attachedImages : undefined);
     clearInput();
-  }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput]);
+  }, [value, attachedImages, isStreaming, isVoiceBusy, onBuiltinCommand, onSend, clearInput]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -669,6 +745,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {compactResultText}
           </div>
         )}
+        {voiceInputError && (
+          <div style={{
+            marginBottom: 8, padding: "5px 10px",
+            background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)",
+            borderRadius: 6, fontSize: 12, color: "rgba(185,28,28,0.95)",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            {voiceInputError}
+          </div>
+        )}
         {/* Image previews */}
         {attachedImages.length > 0 && (
           <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
@@ -860,10 +949,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             onInput={handleInput}
             onPaste={handlePaste}
             placeholder={
-              isStreaming && (onSteer || onFollowUp)
-                ? "Steer 立即注入 / Follow-up 排队…"
-                : isStreaming ? "Agent is running…"
-                : "Message… Type / for commands"
+              voiceRecording
+                ? "Recording voice… Tap stop when done"
+                : isTranscribingVoice
+                  ? "Transcribing voice…"
+                  : isStreaming && (onSteer || onFollowUp)
+                    ? "Steer 立即注入 / Follow-up 排队…"
+                    : isStreaming ? "Agent is running…"
+                    : "Message… Type / for commands"
             }
             rows={1}
             style={{
@@ -933,32 +1026,66 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               )}
             </div>
           ) : (
-            <button
-              onClick={handleSend}
-              disabled={!value.trim() && !attachedImages.length}
-              style={{
-                flexShrink: 0,
-                alignSelf: "flex-end",
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "7px 14px",
-                background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
-                border: "none",
-                borderRadius: 8,
-                color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
-                transition: "background 0.15s, box-shadow 0.15s",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="2" y1="7" x2="11" y2="7" />
-                <polyline points="7.5 3 12 7 7.5 11" />
-              </svg>
-              Send
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
+              {voiceInputSupported && (
+                <button
+                  type="button"
+                  onClick={handleVoiceInputClick}
+                  disabled={isTranscribingVoice}
+                  title={voiceRecording ? "Stop voice recording" : "Voice input"}
+                  aria-label={voiceRecording ? "Stop voice recording" : "Start voice recording"}
+                  style={{
+                    flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: voiceRecording ? "rgba(239,68,68,0.12)" : "var(--bg-panel)",
+                    border: "none",
+                    borderRadius: 8,
+                    color: voiceRecording ? "rgba(220,38,38,1)" : "var(--text-dim)",
+                    cursor: isTranscribingVoice ? "not-allowed" : "pointer",
+                    opacity: isTranscribingVoice ? 0.6 : 1,
+                    transition: "background 0.15s, color 0.15s",
+                  }}
+                >
+                  {voiceRecording ? (
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+                      <rect x="3" y="3" width="8" height="8" rx="1.5" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" y1="19" x2="12" y2="22" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={handleSend}
+                disabled={isVoiceBusy || (!value.trim() && !attachedImages.length)}
+                style={{
+                  flexShrink: 0,
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "7px 14px",
+                  background: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "var(--accent)" : "var(--bg-panel)",
+                  border: "none",
+                  borderRadius: 8,
+                  color: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "#fff" : "var(--text-dim)",
+                  cursor: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "pointer" : "not-allowed",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                  boxShadow: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                  transition: "background 0.15s, box-shadow 0.15s",
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="2" y1="7" x2="11" y2="7" />
+                  <polyline points="7.5 3 12 7 7.5 11" />
+                </svg>
+                Send
+              </button>
+            </div>
           )}
           </div>
         </div>
