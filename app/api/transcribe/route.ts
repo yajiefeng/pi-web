@@ -1,40 +1,30 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { transcribeAudioFile } from "../../../lib/transcription/transcribe.ts";
 
 export const dynamic = "force-dynamic";
 
+function getErrorStatus(error: unknown): number {
+  const status = typeof error === "object" && error !== null && "status" in error
+    ? Number((error as { status?: unknown }).status)
+    : 500;
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function POST(req: Request) {
-  const form = await req.formData();
-  const audio = form.get("audio");
+  try {
+    const form = await req.formData();
+    const audio = form.get("audio");
 
-  if (!(audio instanceof File) || audio.size === 0) {
-    return Response.json({ error: "audio file is required" }, { status: 400 });
+    if (!(audio instanceof File) || audio.size === 0) {
+      return Response.json({ error: "audio file is required" }, { status: 400 });
+    }
+
+    const text = await transcribeAudioFile(audio);
+    return Response.json({ text });
+  } catch (error) {
+    return Response.json({ error: getErrorMessage(error) }, { status: getErrorStatus(error) });
   }
-
-  const apiKey = await AuthStorage.create().getApiKey("openai");
-  if (!apiKey) {
-    return Response.json({ error: "OpenAI API key is not configured" }, { status: 400 });
-  }
-
-  const openAIForm = new FormData();
-  openAIForm.set("file", audio, audio.name || "audio.webm");
-  openAIForm.set("model", "gpt-4o-mini-transcribe");
-
-  const openAIResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: openAIForm,
-  });
-
-  if (!openAIResponse.ok) {
-    return Response.json({ error: "OpenAI transcription failed" }, { status: 502 });
-  }
-
-  const result = await openAIResponse.json() as { text?: unknown };
-  const text = typeof result.text === "string" ? result.text.trim() : "";
-
-  if (!text) {
-    return Response.json({ error: "Transcription returned no text" }, { status: 422 });
-  }
-
-  return Response.json({ text });
 }

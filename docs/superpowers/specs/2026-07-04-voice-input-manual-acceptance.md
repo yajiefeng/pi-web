@@ -14,7 +14,7 @@ Before deploying voice input, run these checks manually. Do not deploy, build, o
 - [ ] Edit the transcript before sending.
 - [ ] Send the edited prompt and confirm normal send behavior still works.
 - [ ] Deny microphone permission once and confirm the recovery error is clear.
-- [ ] Temporarily remove or invalidate the OpenAI key and confirm the setup error is clear.
+- [ ] Temporarily remove or invalidate the Volcengine Ark/Doubao and OpenAI transcription keys and confirm the setup error is clear.
 - [ ] Try a silent/empty recording and confirm no blank text is inserted.
 - [ ] Simulate a network/transcription failure and confirm the existing draft is preserved and retry is available.
 

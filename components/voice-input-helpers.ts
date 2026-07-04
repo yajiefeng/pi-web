@@ -20,7 +20,7 @@ const LEADING_PUNCTUATION = /^[,.;:!?，。！？、；：]/;
 const ERROR_MESSAGES: Record<VoiceInputErrorCode, string> = {
   "permission-denied": "Microphone permission was denied. Allow microphone access and try again.",
   "unsupported-browser": "Voice input is not supported in this browser.",
-  "missing-openai-key": "OpenAI API key is not configured. Add an OpenAI API key in model settings and try again.",
+  "missing-openai-key": "Voice transcription API key is not configured. Add a Volcengine Ark/Doubao or OpenAI API key and try again.",
   "empty-audio": "No speech was detected. Try recording again.",
   "transcription-failed": "Voice transcription failed. Try again.",
 };
@@ -96,7 +96,12 @@ export function normalizeVoiceInputError(error: unknown): string {
   if (normalized.includes("unsupported") || normalized.includes("mediarecorder") || normalized.includes("getusermedia")) {
     return ERROR_MESSAGES["unsupported-browser"];
   }
-  if (normalized.includes("openai api key") || normalized.includes("api key") || normalized.includes("not configured")) {
+  if (
+    normalized.includes("transcription api key") ||
+    normalized.includes("openai api key") ||
+    normalized.includes("api key") ||
+    normalized.includes("not configured")
+  ) {
     return ERROR_MESSAGES["missing-openai-key"];
   }
   if (
