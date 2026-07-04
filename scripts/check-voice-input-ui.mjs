@@ -13,6 +13,8 @@ assert.doesNotMatch(chatInput, /Choose audio/, "voice input should not offer fil
 assert.match(chatInput, /recordingElapsedSeconds/, "recording state should track elapsed time");
 assert.match(chatInput, /shouldAutoStopRecording/, "recording should auto-stop at the configured limit");
 assert.match(chatInput, /Stop voice recording/, "recording state should expose a clear stop control");
+assert.match(chatInput, /const voiceInputButton[\s\S]*handleVoiceInputClick/, "voice input button should use the shared voice click handler");
+assert.match(chatInput, /isStreaming \? \([\s\S]*\{voiceInputButton\}[\s\S]*Steer[\s\S]*Follow-up/, "streaming controls should include the same voice input button next to Steer and Follow-up");
 assert.match(chatInput, /Try again/, "voice failures should expose a retry path");
 assert.match(chatInput, /Voice diagnostics/, "voice failures should expose browser microphone diagnostics");
 assert.match(chatInput, /policy=/, "voice diagnostics should expose the microphone permission policy state");

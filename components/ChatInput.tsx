@@ -406,7 +406,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [appendTranscriptToDraft, isTranscribingVoice]);
 
   const startVoiceInput = useCallback(async () => {
-    if (isStreaming || isTranscribingVoice || voiceRecordingRef.current) return;
+    if (isTranscribingVoice || voiceRecordingRef.current) return;
 
     setVoiceInputError(null);
     setModelDropdownOpen(false);
@@ -430,7 +430,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       });
       setVoiceInputError(normalizeVoiceInputError(error));
     }
-  }, [isStreaming, isTranscribingVoice]);
+  }, [isTranscribingVoice]);
 
   const handleVoiceInputClick = useCallback(() => {
     if (voiceRecordingRef.current) {
@@ -516,6 +516,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     const msg = value.trim();
+    if (isVoiceBusy) return;
     if (!msg && !attachedImages.length) return;
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
@@ -529,7 +530,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
     }
     clearInput();
-  }, [value, attachedImages, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput]);
+  }, [value, attachedImages, isVoiceBusy, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = filteredSlashCommands.length - 1;
@@ -751,6 +752,39 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [isMobile]);
 
 
+  const voiceInputButton = voiceInputSupported ? (
+    <button
+      type="button"
+      onClick={handleVoiceInputClick}
+      disabled={isTranscribingVoice}
+      title={voiceRecording ? "Stop voice recording" : "Voice input"}
+      aria-label={voiceRecording ? "Stop voice recording" : "Start voice recording"}
+      style={{
+        flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 32, height: 32, padding: 0,
+        background: voiceRecording ? "rgba(239,68,68,0.12)" : "var(--bg-panel)",
+        border: "none",
+        borderRadius: 8,
+        color: voiceRecording ? "rgba(220,38,38,1)" : "var(--text-dim)",
+        cursor: isTranscribingVoice ? "not-allowed" : "pointer",
+        opacity: isTranscribingVoice ? 0.6 : 1,
+        transition: "background 0.15s, color 0.15s",
+      }}
+    >
+      {voiceRecording ? (
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+          <rect x="3" y="3" width="8" height="8" rx="1.5" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="22" />
+        </svg>
+      )}
+    </button>
+  ) : null;
 
   return (
     <div
@@ -1112,19 +1146,20 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
           {isStreaming ? (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
+              {voiceInputButton}
               {onSteer && (
                 <button
                   onClick={() => sendQueued("steer")}
-                  disabled={!value.trim() && !attachedImages.length}
+                  disabled={isVoiceBusy || (!value.trim() && !attachedImages.length)}
                   title="打断 Agent 当前运行，立即注入消息"
                   style={{
                     display: "flex", alignItems: "center", gap: 5,
                     padding: "7px 12px",
-                    background: (value.trim() || attachedImages.length) ? "rgba(234,179,8,0.12)" : "none",
+                    background: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "rgba(234,179,8,0.12)" : "none",
                     border: "1px solid rgba(234,179,8,0.35)",
                     borderRadius: 8,
-                    color: (value.trim() || attachedImages.length) ? "rgba(180,130,0,1)" : "var(--text-dim)",
-                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                    color: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "rgba(180,130,0,1)" : "var(--text-dim)",
+                    cursor: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "pointer" : "not-allowed",
                     fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
                     transition: "background 0.12s",
                   }}
@@ -1138,16 +1173,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               {onFollowUp && (
                 <button
                   onClick={() => sendQueued("followup")}
-                  disabled={!value.trim() && !attachedImages.length}
+                  disabled={isVoiceBusy || (!value.trim() && !attachedImages.length)}
                   title="在 Agent 完成后排队发送"
                   style={{
                     display: "flex", alignItems: "center", gap: 5,
                     padding: "7px 12px",
-                    background: (value.trim() || attachedImages.length) ? "rgba(129,140,248,0.12)" : "none",
+                    background: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "rgba(129,140,248,0.12)" : "none",
                     border: "1px solid rgba(129,140,248,0.35)",
                     borderRadius: 8,
-                    color: (value.trim() || attachedImages.length) ? "rgba(99,102,241,1)" : "var(--text-dim)",
-                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                    color: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "rgba(99,102,241,1)" : "var(--text-dim)",
+                    cursor: (!isVoiceBusy && (value.trim() || attachedImages.length)) ? "pointer" : "not-allowed",
                     fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
                     transition: "background 0.12s",
                   }}
@@ -1162,39 +1197,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
-              {voiceInputSupported && (
-                <button
-                  type="button"
-                  onClick={handleVoiceInputClick}
-                  disabled={isTranscribingVoice}
-                  title={voiceRecording ? "Stop voice recording" : "Voice input"}
-                  aria-label={voiceRecording ? "Stop voice recording" : "Start voice recording"}
-                  style={{
-                    flexShrink: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 32, height: 32, padding: 0,
-                    background: voiceRecording ? "rgba(239,68,68,0.12)" : "var(--bg-panel)",
-                    border: "none",
-                    borderRadius: 8,
-                    color: voiceRecording ? "rgba(220,38,38,1)" : "var(--text-dim)",
-                    cursor: isTranscribingVoice ? "not-allowed" : "pointer",
-                    opacity: isTranscribingVoice ? 0.6 : 1,
-                    transition: "background 0.15s, color 0.15s",
-                  }}
-                >
-                  {voiceRecording ? (
-                    <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-                      <rect x="3" y="3" width="8" height="8" rx="1.5" />
-                    </svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                      <line x1="12" y1="19" x2="12" y2="22" />
-                    </svg>
-                  )}
-                </button>
-              )}
+              {voiceInputButton}
               <button
                 onClick={handleSend}
                 disabled={isVoiceBusy || (!value.trim() && !attachedImages.length)}
