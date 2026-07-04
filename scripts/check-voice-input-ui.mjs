@@ -14,6 +14,7 @@ assert.match(chatInput, /recordingElapsedSeconds/, "recording state should track
 assert.match(chatInput, /shouldAutoStopRecording/, "recording should auto-stop at the configured limit");
 assert.match(chatInput, /Stop voice recording/, "recording state should expose a clear stop control");
 assert.match(chatInput, /Try again/, "voice failures should expose a retry path");
+assert.match(chatInput, /Browser microphone permission/, "voice failures should expose the browser permission state");
 assert.match(globals, /@keyframes voice-input-wave/, "waveform animation should be defined");
 assert.match(globals, /prefers-reduced-motion/, "waveform animation should respect reduced motion");
 assert.match(manualAcceptance, /iPhone Chrome/, "manual acceptance should cover iPhone Chrome");

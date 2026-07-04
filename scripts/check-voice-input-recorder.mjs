@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 const {
   encodeWav,
+  getMicrophonePermissionState,
   startVoiceRecording,
   supportsVoiceInput,
 } = await import("../components/voice-input-recorder.ts");
@@ -15,6 +16,37 @@ assert.equal(supportsVoiceInput({
   navigator: { mediaDevices: { getUserMedia: async () => ({}) } },
   AudioContext: class {},
 }), true);
+assert.equal(await getMicrophonePermissionState({}), "unknown");
+{
+  const permissions = {
+    async query(descriptor) {
+      assert.equal(this, permissions, "permissions.query must be called with navigator.permissions as this");
+      assert.deepEqual(descriptor, { name: "microphone" });
+      return { state: "prompt" };
+    },
+  };
+  assert.equal(await getMicrophonePermissionState({ navigator: { permissions } }), "prompt");
+}
+{
+  const permissions = { async query() { return { state: "denied" }; } };
+  const mediaDevices = {
+    async getUserMedia() {
+      const error = new Error("Permission denied");
+      error.name = "NotAllowedError";
+      throw error;
+    },
+  };
+
+  await assert.rejects(
+    () => startVoiceRecording({ navigator: { mediaDevices, permissions }, MediaRecorder: class {} }),
+    (error) => {
+      assert.equal(error.name, "NotAllowedError");
+      assert.equal(error.code, "permission-denied");
+      assert.equal(error.permissionState, "denied");
+      return true;
+    },
+  );
+}
 {
   const wav = await encodeWav([Float32Array.from([0, 1, -1])], 16_000).arrayBuffer();
   assert.equal(new TextDecoder().decode(wav.slice(0, 4)), "RIFF");

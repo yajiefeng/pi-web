@@ -1,5 +1,7 @@
 type GetUserMedia = (constraints: MediaStreamConstraints) => Promise<MediaStream>;
 
+type PermissionQuery = (descriptor: PermissionDescriptor) => Promise<PermissionStatus>;
+
 type MediaRecorderLike = {
   start: () => void;
   stop: () => void;
@@ -43,6 +45,9 @@ type VoiceInputRuntime = {
     mediaDevices?: {
       getUserMedia?: GetUserMedia;
     };
+    permissions?: {
+      query?: PermissionQuery;
+    };
   };
   MediaRecorder?: MediaRecorderConstructor;
   AudioContext?: AudioContextConstructor;
@@ -55,6 +60,26 @@ export type VoiceRecording = {
   cancel: () => void;
 };
 
+export type MicrophonePermissionState = PermissionState | "unknown";
+
+export async function getMicrophonePermissionState(
+  runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime,
+): Promise<MicrophonePermissionState> {
+  const permissions = runtime.navigator?.permissions;
+  if (typeof permissions?.query !== "function") return "unknown";
+
+  try {
+    const status = await permissions.query({ name: "microphone" as PermissionName });
+    if (status.state === "granted" || status.state === "denied" || status.state === "prompt") {
+      return status.state;
+    }
+  } catch {
+    // Some browsers do not support querying microphone permission state.
+  }
+
+  return "unknown";
+}
+
 export function supportsVoiceInput(runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime): boolean {
   const hasGetUserMedia = typeof runtime.navigator?.mediaDevices?.getUserMedia === "function";
   const hasMediaRecorder = typeof runtime.MediaRecorder === "function";
@@ -64,6 +89,24 @@ export function supportsVoiceInput(runtime: VoiceInputRuntime = globalThis as un
 
 function stopStream(stream: MediaStream): void {
   stream.getTracks().forEach((track) => track.stop());
+}
+
+function isPermissionError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const name = "name" in error ? String((error as { name?: unknown }).name ?? "") : "";
+  const message = error instanceof Error ? error.message : String((error as { message?: unknown }).message ?? "");
+  return /notallowed|permission/i.test(`${name} ${message}`);
+}
+
+function voiceRecordingStartError(error: unknown, permissionState: MicrophonePermissionState): Error {
+  const message = error instanceof Error ? error.message : "Microphone access failed";
+  const wrapped = new Error(message);
+  wrapped.name = error instanceof Error ? error.name : "Error";
+  return Object.assign(wrapped, {
+    cause: error,
+    permissionState,
+    ...(permissionState === "denied" || isPermissionError(error) ? { code: "permission-denied" } : {}),
+  });
 }
 
 export async function transcribeVoiceAudio(
@@ -255,7 +298,13 @@ export async function startVoiceRecording(runtime: VoiceInputRuntime = globalThi
     throw Object.assign(new Error("Voice input is not supported in this browser"), { code: "unsupported-browser" });
   }
 
-  const stream = await mediaDevices.getUserMedia({ audio: true });
+  let stream: MediaStream;
+  try {
+    stream = await mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    const permissionState = await getMicrophonePermissionState(runtime);
+    throw voiceRecordingStartError(error, permissionState);
+  }
   const fetchImpl = runtime.fetch ?? fetch;
   const AudioContextCtor = runtime.AudioContext ?? runtime.webkitAudioContext;
 

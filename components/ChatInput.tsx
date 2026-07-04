@@ -5,7 +5,7 @@ import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } f
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError, shouldAutoStopRecording } from "./voice-input-helpers";
-import { startVoiceRecording, supportsVoiceInput, type VoiceRecording } from "./voice-input-recorder";
+import { getMicrophonePermissionState, startVoiceRecording, supportsVoiceInput, type MicrophonePermissionState, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -171,6 +171,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [voiceRecording, setVoiceRecording] = useState<VoiceRecording | null>(null);
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
   const [voiceInputError, setVoiceInputError] = useState<string | null>(null);
+  const [microphonePermissionState, setMicrophonePermissionState] = useState<MicrophonePermissionState>("unknown");
   const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
 
@@ -322,7 +323,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [value]);
 
   useEffect(() => {
-    setVoiceInputSupported(supportsVoiceInput());
+    const supported = supportsVoiceInput();
+    setVoiceInputSupported(supported);
+    if (supported) {
+      void getMicrophonePermissionState().then(setMicrophonePermissionState);
+    }
   }, []);
 
   useEffect(() => {
@@ -394,10 +399,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     try {
       const recording = await startVoiceRecording();
       voiceRecordingRef.current = recording;
+      setMicrophonePermissionState("granted");
       setRecordingElapsedSeconds(0);
       setRecordingStartedAtMs(Date.now());
       setVoiceRecording(recording);
     } catch (error) {
+      void getMicrophonePermissionState().then(setMicrophonePermissionState);
       setVoiceInputError(normalizeVoiceInputError(error));
     }
   }, [isStreaming, isTranscribingVoice]);
@@ -783,7 +790,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
               <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            <span style={{ flex: "1 1 auto", minWidth: 0 }}>{voiceInputError}</span>
+            <span style={{ flex: "1 1 auto", minWidth: 0 }}>
+              {voiceInputError}
+              {microphonePermissionState !== "unknown" && (
+                <span style={{ opacity: 0.72, marginLeft: 4 }}>— Browser microphone permission: {microphonePermissionState}</span>
+              )}
+            </span>
             {!isVoiceBusy && !isStreaming && voiceInputSupported && (
               <button
                 type="button"
