@@ -653,6 +653,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
+  const mobileStreamingActions = isMobile && isStreaming && Boolean(onSteer || onFollowUp);
+  const shouldWrapComposerControls = Boolean((isMobile && voiceInputStatus) || mobileStreamingActions);
 
   const voiceInputButton = voiceInputSupported ? (
     <button
@@ -940,7 +942,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           <div
             style={{
               display: "flex",
-              flexWrap: isMobile && voiceInputStatus ? "wrap" : "nowrap",
+              flexWrap: shouldWrapComposerControls ? "wrap" : "nowrap",
               gap: 8,
               alignItems: "center",
               background: "var(--bg)",
@@ -986,7 +988,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             aria-readonly={isVoiceBusy}
             style={{
               flex: 1,
-              flexBasis: isMobile && voiceInputStatus ? "100%" : 0,
+              flexBasis: shouldWrapComposerControls ? "100%" : 0,
               minWidth: 0,
               background: "none",
               border: "none",
@@ -1047,7 +1049,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           )}
 
           {isStreaming ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6,
+              flexShrink: 0, alignSelf: "flex-end",
+              width: mobileStreamingActions ? "100%" : undefined,
+              justifyContent: mobileStreamingActions ? "flex-end" : undefined,
+            }}>
               {voiceInputButton}
               {onSteer && (
                 <button

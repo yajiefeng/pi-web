@@ -20,6 +20,10 @@ assert.match(useVoiceInputHook, /getVoiceInputDiagnostics/, "voice hook should o
 assert.match(chatInput, /Stop voice recording/, "recording state should expose a clear stop control");
 assert.match(chatInput, /const voiceInputButton[\s\S]*handleVoiceInputClick/, "voice input button should use the shared voice click handler");
 assert.match(chatInput, /isStreaming \? \([\s\S]*\{voiceInputButton\}[\s\S]*Steer[\s\S]*Follow-up/, "streaming controls should include the same voice input button next to Steer and Follow-up");
+assert.match(chatInput, /mobileStreamingActions/, "mobile streaming composer should detect when action buttons are present");
+assert.match(chatInput, /flexWrap: shouldWrapComposerControls \? "wrap" : "nowrap"/, "mobile streaming composer should wrap controls below the textarea");
+assert.match(chatInput, /width: mobileStreamingActions \? "100%" : undefined/, "mobile streaming controls should take a full-width row");
+assert.match(chatInput, /justifyContent: mobileStreamingActions \? "flex-end" : undefined/, "mobile streaming controls should right-align below the textarea");
 assert.match(chatInput, /Try again/, "voice failures should expose a retry path");
 assert.match(chatInput, /Voice diagnostics/, "voice failures should expose browser microphone diagnostics");
 assert.match(useVoiceInputHook, /policy=/, "voice diagnostics should expose the microphone permission policy state");
