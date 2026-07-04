@@ -4,8 +4,8 @@ import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, f
 import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError, shouldAutoStopRecording } from "./voice-input-helpers";
-import { getVoiceInputDiagnostics, startVoiceRecording, supportsVoiceInput, type MicrophonePermissionState, type VoiceInputDiagnostics, type VoiceRecording } from "./voice-input-recorder";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { appendVoiceTranscript } from "./voice-input-helpers";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -84,19 +84,6 @@ function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
   return tokens.toLocaleString();
-}
-
-function formatVoiceInputDiagnostics(diagnostics: VoiceInputDiagnostics | null): string | null {
-  if (!diagnostics) return null;
-
-  const parts = [
-    `permission=${diagnostics.permissionState}`,
-    `secure=${diagnostics.isSecureContext}`,
-    `policy=${diagnostics.microphonePolicy}`,
-    `topLevel=${diagnostics.isTopLevel}`,
-  ];
-  if (diagnostics.errorName) parts.push(`error=${diagnostics.errorName}`);
-  return parts.join(", ");
 }
 
 type SlashCommandPaletteItem = SlashCommandInfo | {
@@ -180,14 +167,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   ));
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
-  const [voiceInputSupported, setVoiceInputSupported] = useState(false);
-  const [voiceRecording, setVoiceRecording] = useState<VoiceRecording | null>(null);
-  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
-  const [voiceInputError, setVoiceInputError] = useState<string | null>(null);
-  const [microphonePermissionState, setMicrophonePermissionState] = useState<MicrophonePermissionState>("unknown");
-  const [voiceInputDiagnostics, setVoiceInputDiagnostics] = useState<VoiceInputDiagnostics | null>(null);
-  const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
-  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -196,7 +175,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const voiceRecordingRef = useRef<VoiceRecording | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -206,14 +184,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const attachedImagesRef = useRef(attachedImages);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
-
-  const isVoiceBusy = voiceRecording !== null || isTranscribingVoice;
-  const voiceInputStatus = getVoiceInputStatus({
-    phase: voiceRecording ? "recording" : isTranscribingVoice ? "transcribing" : "idle",
-    elapsedSeconds: recordingElapsedSeconds,
-  });
-  const voiceInputDiagnosticsText = formatVoiceInputDiagnostics(voiceInputDiagnostics)
-    ?? (microphonePermissionState !== "unknown" ? `permission=${microphonePermissionState}` : null);
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -339,35 +309,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [value]);
 
   useEffect(() => {
-    const supported = supportsVoiceInput();
-    setVoiceInputSupported(supported);
-    if (supported) {
-      void getVoiceInputDiagnostics().then((diagnostics) => {
-        setMicrophonePermissionState(diagnostics.permissionState);
-        setVoiceInputDiagnostics(diagnostics);
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (recordingStartedAtMs === null) return;
-
-    const updateElapsed = () => {
-      setRecordingElapsedSeconds(Math.max(0, Math.floor((Date.now() - recordingStartedAtMs) / 1000)));
-    };
-
-    updateElapsed();
-    const interval = window.setInterval(updateElapsed, 250);
-    return () => window.clearInterval(interval);
-  }, [recordingStartedAtMs]);
-
-  useEffect(() => {
-    return () => {
-      voiceRecordingRef.current?.cancel();
-    };
-  }, []);
-
-  useEffect(() => {
     return () => {
       attachedImagesRef.current.forEach(revokeImagePreview);
     };
@@ -384,67 +325,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
-  const stopVoiceInput = useCallback(async () => {
-    const recording = voiceRecordingRef.current;
-    if (!recording || isTranscribingVoice) return;
-
-    voiceRecordingRef.current = null;
-    setVoiceRecording(null);
-    setRecordingStartedAtMs(null);
-    setIsTranscribingVoice(true);
-    setVoiceInputError(null);
-
-    try {
-      const transcript = await recording.stopAndTranscribe();
-      appendTranscriptToDraft(transcript);
-    } catch (error) {
-      setVoiceInputError(normalizeVoiceInputError(error));
-    } finally {
-      setIsTranscribingVoice(false);
-      setRecordingElapsedSeconds(0);
-    }
-  }, [appendTranscriptToDraft, isTranscribingVoice]);
-
-  const startVoiceInput = useCallback(async () => {
-    if (isTranscribingVoice || voiceRecordingRef.current) return;
-
-    setVoiceInputError(null);
+  const prepareVoiceInput = useCallback(() => {
     setModelDropdownOpen(false);
     setToolDropdownOpen(false);
     setThinkingDropdownOpen(false);
     setControlsMenuOpen(false);
     setSlashMenuOpen(false);
+  }, []);
 
-    try {
-      const recording = await startVoiceRecording();
-      voiceRecordingRef.current = recording;
-      setMicrophonePermissionState("granted");
-      setVoiceInputDiagnostics(null);
-      setRecordingElapsedSeconds(0);
-      setRecordingStartedAtMs(Date.now());
-      setVoiceRecording(recording);
-    } catch (error) {
-      void getVoiceInputDiagnostics(error).then((diagnostics) => {
-        setMicrophonePermissionState(diagnostics.permissionState);
-        setVoiceInputDiagnostics(diagnostics);
-      });
-      setVoiceInputError(normalizeVoiceInputError(error));
-    }
-  }, [isTranscribingVoice]);
-
-  const handleVoiceInputClick = useCallback(() => {
-    if (voiceRecordingRef.current) {
-      void stopVoiceInput();
-      return;
-    }
-    void startVoiceInput();
-  }, [startVoiceInput, stopVoiceInput]);
-
-  useEffect(() => {
-    if (!voiceRecording || isTranscribingVoice) return;
-    if (!shouldAutoStopRecording(recordingElapsedSeconds)) return;
-    void stopVoiceInput();
-  }, [isTranscribingVoice, recordingElapsedSeconds, stopVoiceInput, voiceRecording]);
+  const {
+    supported: voiceInputSupported,
+    busy: isVoiceBusy,
+    recording: voiceRecording,
+    transcribing: isTranscribingVoice,
+    error: voiceInputError,
+    diagnosticsText: voiceInputDiagnosticsText,
+    status: voiceInputStatus,
+    start: startVoiceInput,
+    toggle: handleVoiceInputClick,
+  } = useVoiceInput({
+    onTranscript: appendTranscriptToDraft,
+    onBeforeStart: prepareVoiceInput,
+  });
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();

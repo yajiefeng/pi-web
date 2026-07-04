@@ -85,22 +85,24 @@ Use the selected transcription provider's automatic language detection. Do not p
 
 ### Client
 
-`ChatInput` currently owns the browser recording state, with the browser/media details hidden behind `components/voice-input-recorder.ts`:
+`ChatInput` consumes voice input through `hooks/useVoiceInput.ts`. The hook owns the browser recording state and returns the small interface the composer needs: support status, busy status, recording/transcribing status, current error, diagnostics text, display status, and start/stop/toggle actions.
+
+`components/voice-input-recorder.ts` owns the browser/media details:
+
+- Request microphone permission.
+- Start and stop browser recording.
+- Accumulate audio chunks in `MediaRecorder` or the Web Audio fallback.
+- Upload the audio blob as multipart form data.
+
+`hooks/useVoiceInput.ts` owns composer-level voice workflow:
 
 - `idle`
 - `recording`
 - `transcribing`
 - `error`
-
-Responsibilities:
-
-- Request microphone permission.
-- Start and stop browser recording through the recorder helper.
-- Accumulate audio chunks in `MediaRecorder` or the Web Audio fallback.
 - Enforce the 60-second max duration.
-- Upload the audio blob as multipart form data.
-- Append returned text to the draft.
-- Surface short error messages.
+- Append returned text to the draft through an `onTranscript` callback.
+- Surface short error messages and browser diagnostics.
 
 ### Server
 
@@ -233,7 +235,6 @@ Also test:
 
 ## Open Questions For Later Versions
 
-- Should `ChatInput` voice state move into a dedicated `useVoiceInput()` hook so the component only consumes `supported`, `busy`, `status`, `error`, `start`, and `stop`?
 - Should language selection be added for users who mostly dictate in one language?
 - Should real audio amplitude visualization replace the pseudo waveform?
 - Should Herdr-managed sessions receive voice text through a Herdr message route once Herdr becomes the default runtime?
