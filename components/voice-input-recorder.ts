@@ -40,6 +40,15 @@ type AudioContextLike = {
 
 type AudioContextConstructor = new () => AudioContextLike;
 
+type PermissionPolicyLike = {
+  allowsFeature?: (feature: string) => boolean;
+};
+
+type VoiceInputDocumentLike = {
+  permissionsPolicy?: PermissionPolicyLike;
+  featurePolicy?: PermissionPolicyLike;
+};
+
 type VoiceInputRuntime = {
   navigator?: {
     mediaDevices?: {
@@ -53,6 +62,10 @@ type VoiceInputRuntime = {
   AudioContext?: AudioContextConstructor;
   webkitAudioContext?: AudioContextConstructor;
   fetch?: typeof fetch;
+  document?: VoiceInputDocumentLike;
+  isSecureContext?: boolean;
+  self?: unknown;
+  top?: unknown;
 };
 
 export type VoiceRecording = {
@@ -61,6 +74,19 @@ export type VoiceRecording = {
 };
 
 export type MicrophonePermissionState = PermissionState | "unknown";
+export type VoiceInputPolicyState = "allowed" | "blocked" | "unknown";
+
+export type VoiceInputDiagnostics = {
+  permissionState: MicrophonePermissionState;
+  microphonePolicy: VoiceInputPolicyState;
+  isSecureContext: boolean | "unknown";
+  isTopLevel: boolean | "unknown";
+  hasGetUserMedia: boolean;
+  hasMediaRecorder: boolean;
+  hasWebAudioRecorder: boolean;
+  errorName?: string;
+  errorMessage?: string;
+};
 
 export async function getMicrophonePermissionState(
   runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime,
@@ -78,6 +104,59 @@ export async function getMicrophonePermissionState(
   }
 
   return "unknown";
+}
+
+export function getMicrophonePolicyState(
+  runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime,
+): VoiceInputPolicyState {
+  const policy = runtime.document?.permissionsPolicy ?? runtime.document?.featurePolicy;
+  if (typeof policy?.allowsFeature !== "function") return "unknown";
+
+  try {
+    return policy.allowsFeature("microphone") ? "allowed" : "blocked";
+  } catch {
+    return "unknown";
+  }
+}
+
+function getTopLevelState(runtime: VoiceInputRuntime): boolean | "unknown" {
+  if (!("self" in runtime) || !("top" in runtime)) return "unknown";
+
+  try {
+    return runtime.self === runtime.top;
+  } catch {
+    return false;
+  }
+}
+
+function getErrorName(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("name" in error)) return undefined;
+  const name = (error as { name?: unknown }).name;
+  return typeof name === "string" && name ? name : undefined;
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error !== "object" || error === null || !("message" in error)) return undefined;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message ? message : undefined;
+}
+
+export async function getVoiceInputDiagnostics(
+  error?: unknown,
+  runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime,
+): Promise<VoiceInputDiagnostics> {
+  return {
+    permissionState: await getMicrophonePermissionState(runtime),
+    microphonePolicy: getMicrophonePolicyState(runtime),
+    isSecureContext: typeof runtime.isSecureContext === "boolean" ? runtime.isSecureContext : "unknown",
+    isTopLevel: getTopLevelState(runtime),
+    hasGetUserMedia: typeof runtime.navigator?.mediaDevices?.getUserMedia === "function",
+    hasMediaRecorder: typeof runtime.MediaRecorder === "function",
+    hasWebAudioRecorder: typeof runtime.AudioContext === "function" || typeof runtime.webkitAudioContext === "function",
+    errorName: getErrorName(error),
+    errorMessage: getErrorMessage(error),
+  };
 }
 
 export function supportsVoiceInput(runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime): boolean {

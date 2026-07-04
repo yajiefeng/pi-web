@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 const {
   encodeWav,
   getMicrophonePermissionState,
+  getMicrophonePolicyState,
+  getVoiceInputDiagnostics,
   startVoiceRecording,
   supportsVoiceInput,
 } = await import("../components/voice-input-recorder.ts");
@@ -26,6 +28,33 @@ assert.equal(await getMicrophonePermissionState({}), "unknown");
     },
   };
   assert.equal(await getMicrophonePermissionState({ navigator: { permissions } }), "prompt");
+}
+assert.equal(getMicrophonePolicyState({}), "unknown");
+assert.equal(getMicrophonePolicyState({ document: { permissionsPolicy: { allowsFeature: () => true } } }), "allowed");
+assert.equal(getMicrophonePolicyState({ document: { permissionsPolicy: { allowsFeature: () => false } } }), "blocked");
+{
+  const diagnostics = await getVoiceInputDiagnostics(new Error("Permission denied"), {
+    navigator: {
+      mediaDevices: { getUserMedia: async () => ({}) },
+      permissions: { async query() { return { state: "denied" }; } },
+    },
+    document: { permissionsPolicy: { allowsFeature: () => true } },
+    isSecureContext: true,
+    self: "same-window",
+    top: "same-window",
+    MediaRecorder: class {},
+  });
+  assert.deepEqual(diagnostics, {
+    permissionState: "denied",
+    microphonePolicy: "allowed",
+    isSecureContext: true,
+    isTopLevel: true,
+    hasGetUserMedia: true,
+    hasMediaRecorder: true,
+    hasWebAudioRecorder: false,
+    errorName: "Error",
+    errorMessage: "Permission denied",
+  });
 }
 {
   const permissions = { async query() { return { state: "denied" }; } };
