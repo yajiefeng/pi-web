@@ -34,6 +34,7 @@
     "test:transcribe-api": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-transcribe-api.mjs",
     "test:voice-input-helpers": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-voice-input-helpers.mjs",
     "test:voice-input-recorder": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-voice-input-recorder.mjs",
+    "test:voice-input-ui": "node scripts/check-voice-input-ui.mjs",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {

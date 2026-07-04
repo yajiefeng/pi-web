@@ -109,6 +109,37 @@ pre, code {
   font-family: var(--font-mono);
 }
 
+.voice-input-waveform {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.voice-input-waveform span {
+  width: 2px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: voice-input-wave 0.9s ease-in-out infinite;
+}
+
+.voice-input-waveform span:nth-child(2) { animation-delay: 0.12s; }
+.voice-input-waveform span:nth-child(3) { animation-delay: 0.24s; }
+.voice-input-waveform span:nth-child(4) { animation-delay: 0.36s; }
+
+@keyframes voice-input-wave {
+  0%, 100% { transform: scaleY(0.55); opacity: 0.58; }
+  50% { transform: scaleY(1.45); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-input-waveform span {
+    animation: none;
+  }
+}
+
 /* react-markdown output styles */
 .markdown-body {
   font-size: 14px;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 const {
   appendVoiceTranscript,
   formatRecordingDuration,
+  getVoiceInputStatus,
   normalizeVoiceInputError,
 } = await import("../components/voice-input-helpers.ts");
 
@@ -16,6 +17,18 @@ assert.equal(appendVoiceTranscript("Existing draft", ", with punctuation"), "Exi
 assert.equal(formatRecordingDuration(0), "0:00");
 assert.equal(formatRecordingDuration(5), "0:05");
 assert.equal(formatRecordingDuration(65), "1:05");
+
+assert.deepEqual(getVoiceInputStatus({ phase: "recording", elapsedSeconds: 5 }), {
+  label: "Recording",
+  detail: "0:05",
+  ariaLabel: "Recording voice for 0:05. Tap stop when done.",
+});
+assert.deepEqual(getVoiceInputStatus({ phase: "transcribing", elapsedSeconds: 0 }), {
+  label: "Transcribing",
+  detail: "Please wait…",
+  ariaLabel: "Transcribing voice input.",
+});
+assert.equal(getVoiceInputStatus({ phase: "idle", elapsedSeconds: 0 }), null);
 
 assert.match(normalizeVoiceInputError({ name: "NotAllowedError" }), /microphone permission/i);
 assert.match(normalizeVoiceInputError(new Error("MediaRecorder is not supported")), /not supported/i);

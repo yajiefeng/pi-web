@@ -4,7 +4,7 @@ import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, f
 import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { appendVoiceTranscript, normalizeVoiceInputError } from "./voice-input-helpers";
+import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError } from "./voice-input-helpers";
 import { startVoiceRecording, supportsVoiceInput, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
@@ -171,6 +171,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [voiceRecording, setVoiceRecording] = useState<VoiceRecording | null>(null);
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
   const [voiceInputError, setVoiceInputError] = useState<string | null>(null);
+  const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -191,6 +193,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   attachedImagesRef.current = attachedImages;
 
   const isVoiceBusy = voiceRecording !== null || isTranscribingVoice;
+  const voiceInputStatus = getVoiceInputStatus({
+    phase: voiceRecording ? "recording" : isTranscribingVoice ? "transcribing" : "idle",
+    elapsedSeconds: recordingElapsedSeconds,
+  });
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -320,6 +326,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   useEffect(() => {
+    if (recordingStartedAtMs === null) return;
+
+    const updateElapsed = () => {
+      setRecordingElapsedSeconds(Math.max(0, Math.floor((Date.now() - recordingStartedAtMs) / 1000)));
+    };
+
+    updateElapsed();
+    const interval = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(interval);
+  }, [recordingStartedAtMs]);
+
+  useEffect(() => {
     return () => {
       voiceRecordingRef.current?.cancel();
     };
@@ -348,6 +366,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
     voiceRecordingRef.current = null;
     setVoiceRecording(null);
+    setRecordingStartedAtMs(null);
     setIsTranscribingVoice(true);
     setVoiceInputError(null);
 
@@ -358,6 +377,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       setVoiceInputError(normalizeVoiceInputError(error));
     } finally {
       setIsTranscribingVoice(false);
+      setRecordingElapsedSeconds(0);
     }
   }, [appendTranscriptToDraft, isTranscribingVoice]);
 
@@ -374,6 +394,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     try {
       const recording = await startVoiceRecording();
       voiceRecordingRef.current = recording;
+      setRecordingElapsedSeconds(0);
+      setRecordingStartedAtMs(Date.now());
       setVoiceRecording(recording);
     } catch (error) {
       setVoiceInputError(normalizeVoiceInputError(error));
@@ -922,10 +944,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           <div
             style={{
               display: "flex",
+              flexWrap: isMobile && voiceInputStatus ? "wrap" : "nowrap",
               gap: 8,
               alignItems: "center",
               background: "var(--bg)",
-              border: `1px solid ${isStreaming && (onSteer || onFollowUp)
+              border: `1px solid ${voiceRecording
+                ? "rgba(239,68,68,0.45)"
+                : isTranscribingVoice
+                  ? "rgba(37,99,235,0.35)"
+                  : isStreaming && (onSteer || onFollowUp)
                 ? "rgba(234,179,8,0.4)"
                 : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
               borderRadius: 14,
@@ -959,8 +986,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     : "Message… Type / for commands"
             }
             rows={1}
+            readOnly={isVoiceBusy}
+            aria-readonly={isVoiceBusy}
             style={{
               flex: 1,
+              flexBasis: isMobile && voiceInputStatus ? "100%" : 0,
+              minWidth: 0,
               background: "none",
               border: "none",
               outline: "none",
@@ -974,6 +1005,50 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               overflow: "auto",
             }}
           />
+
+          {voiceInputStatus && (
+            <div
+              aria-live="polite"
+              aria-label={voiceInputStatus.ariaLabel}
+              style={{
+                flex: "0 1 auto",
+                minWidth: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "6px 8px",
+                borderRadius: 999,
+                background: voiceRecording ? "rgba(239,68,68,0.08)" : "rgba(37,99,235,0.08)",
+                color: voiceRecording ? "rgba(220,38,38,1)" : "var(--accent)",
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {voiceRecording ? (
+                <span className="voice-input-waveform" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: "currentColor",
+                    boxShadow: "0 0 0 4px color-mix(in srgb, currentColor 14%, transparent)",
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              <span>{voiceInputStatus.label}</span>
+              <span style={{ fontFamily: "var(--font-mono)", opacity: 0.82 }}>{voiceInputStatus.detail}</span>
+            </div>
+          )}
 
           {isStreaming ? (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
@@ -1103,7 +1178,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2 }}>
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={isStreaming}
+              disabled={isStreaming || isVoiceBusy}
               title="Attach image"
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
@@ -1111,12 +1186,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 background: "none", border: "none",
                 borderRadius: 9,
                 color: attachedImages.length ? "var(--accent)" : "var(--text-muted)",
-                cursor: isStreaming ? "not-allowed" : "pointer",
-                opacity: isStreaming ? 0.5 : 1,
+                cursor: (isStreaming || isVoiceBusy) ? "not-allowed" : "pointer",
+                opacity: (isStreaming || isVoiceBusy) ? 0.5 : 1,
                 transition: "background 0.12s, color 0.12s",
               }}
               onMouseEnter={(e) => {
-                if (isStreaming) return;
+                if (isStreaming || isVoiceBusy) return;
                 e.currentTarget.style.background = "var(--bg-hover)";
                 e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text)";
               }}
@@ -1140,7 +1215,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
                       setModelDropdownOpen((v) => !v);
                     }}
-                    disabled={isStreaming}
+                    disabled={isStreaming || isVoiceBusy}
                     style={{
                       display: "flex", alignItems: "center", gap: 6,
                       justifyContent: isMobile ? "flex-start" : undefined,
@@ -1153,13 +1228,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       border: "none",
                       borderRadius: 9,
                       color: "var(--text-muted)",
-                      cursor: isStreaming ? "not-allowed" : "pointer",
+                      cursor: (isStreaming || isVoiceBusy) ? "not-allowed" : "pointer",
                       fontSize: 12,
-                      opacity: isStreaming ? 0.5 : 1,
+                      opacity: (isStreaming || isVoiceBusy) ? 0.5 : 1,
                       transition: "background 0.12s, color 0.12s",
                     }}
                     onMouseEnter={(e) => {
-                      if (isStreaming) return;
+                      if (isStreaming || isVoiceBusy) return;
                       e.currentTarget.style.background = "var(--bg-hover)";
                       e.currentTarget.style.color = "var(--text)";
                     }}

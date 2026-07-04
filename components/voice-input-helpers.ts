@@ -5,6 +5,14 @@ export type VoiceInputErrorCode =
   | "empty-audio"
   | "transcription-failed";
 
+export type VoiceInputPhase = "idle" | "recording" | "transcribing";
+
+export type VoiceInputStatus = {
+  label: string;
+  detail: string;
+  ariaLabel: string;
+};
+
 const LEADING_PUNCTUATION = /^[,.;:!?，。！？、；：]/;
 
 const ERROR_MESSAGES: Record<VoiceInputErrorCode, string> = {
@@ -29,6 +37,31 @@ export function formatRecordingDuration(seconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const remainingSeconds = totalSeconds % 60;
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+export function getVoiceInputStatus({
+  phase,
+  elapsedSeconds,
+}: {
+  phase: VoiceInputPhase;
+  elapsedSeconds: number;
+}): VoiceInputStatus | null {
+  if (phase === "idle") return null;
+
+  if (phase === "transcribing") {
+    return {
+      label: "Transcribing",
+      detail: "Please wait…",
+      ariaLabel: "Transcribing voice input.",
+    };
+  }
+
+  const duration = formatRecordingDuration(elapsedSeconds);
+  return {
+    label: "Recording",
+    detail: duration,
+    ariaLabel: `Recording voice for ${duration}. Tap stop when done.`,
+  };
 }
 
 function isVoiceInputErrorCode(value: unknown): value is VoiceInputErrorCode {
