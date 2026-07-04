@@ -5,7 +5,7 @@ import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } f
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError, shouldAutoStopRecording } from "./voice-input-helpers";
-import { startVoiceRecording, supportsVoiceInput, transcribeVoiceAudio, type VoiceRecording } from "./voice-input-recorder";
+import { prefersNativeAudioCapture, startVoiceRecording, supportsVoiceInput, transcribeVoiceAudio, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -325,7 +325,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [value]);
 
   useEffect(() => {
-    setVoiceInputSupported(supportsVoiceInput());
+    const inlineSupported = supportsVoiceInput();
+    const nativePreferred = prefersNativeAudioCapture();
+    setVoiceInputSupported(inlineSupported && !nativePreferred);
+    setUseNativeAudioCapture(nativePreferred || !inlineSupported);
   }, []);
 
   useEffect(() => {

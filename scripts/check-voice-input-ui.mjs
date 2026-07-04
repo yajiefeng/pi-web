@@ -11,6 +11,7 @@ assert.match(chatInput, /voice-input-waveform/, "recording state should render a
 assert.match(chatInput, /audioInputRef/, "unsupported recorder browsers should fall back to native audio capture");
 assert.match(chatInput, /accept="audio\/\*"/, "native audio capture should only accept audio");
 assert.match(chatInput, /capture=\{true\}/, "native audio capture should request the microphone capture UI where supported");
+assert.match(chatInput, /prefersNativeAudioCapture/, "iOS browsers should use native audio capture without first failing inline recording");
 assert.match(chatInput, /transcribeVoiceAudio/, "native audio capture should upload through the same transcription path");
 assert.match(chatInput, /recordingElapsedSeconds/, "recording state should track elapsed time");
 assert.match(chatInput, /shouldAutoStopRecording/, "recording should auto-stop at the configured limit");
