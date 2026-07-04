@@ -43,9 +43,6 @@ type VoiceInputRuntime = {
     mediaDevices?: {
       getUserMedia?: GetUserMedia;
     };
-    maxTouchPoints?: number;
-    platform?: string;
-    userAgent?: string;
   };
   MediaRecorder?: MediaRecorderConstructor;
   AudioContext?: AudioContextConstructor;
@@ -63,18 +60,6 @@ export function supportsVoiceInput(runtime: VoiceInputRuntime = globalThis as un
   const hasMediaRecorder = typeof runtime.MediaRecorder === "function";
   const hasWebAudioRecorder = typeof runtime.AudioContext === "function" || typeof runtime.webkitAudioContext === "function";
   return hasGetUserMedia && (hasMediaRecorder || hasWebAudioRecorder);
-}
-
-export function prefersNativeAudioCapture(runtime: VoiceInputRuntime = globalThis as unknown as VoiceInputRuntime): boolean {
-  const userAgent = runtime.navigator?.userAgent ?? "";
-  const platform = runtime.navigator?.platform ?? "";
-  const maxTouchPoints = runtime.navigator?.maxTouchPoints ?? 0;
-
-  // iOS browsers all use WebKit under the hood. Chrome on iOS reports CriOS,
-  // but inline recording support is still fragile; the native audio capture UI
-  // is more reliable for iPhone/iPad.
-  return /iPhone|iPad|iPod|CriOS|FxiOS/i.test(userAgent)
-    || (platform === "MacIntel" && maxTouchPoints > 1);
 }
 
 function stopStream(stream: MediaStream): void {
@@ -265,12 +250,12 @@ export async function startVoiceRecording(runtime: VoiceInputRuntime = globalThi
     throw Object.assign(new Error("Voice input is not supported in this browser"), { code: "unsupported-browser" });
   }
 
-  const getUserMedia = runtime.navigator?.mediaDevices?.getUserMedia;
-  if (!getUserMedia) {
+  const mediaDevices = runtime.navigator?.mediaDevices;
+  if (typeof mediaDevices?.getUserMedia !== "function") {
     throw Object.assign(new Error("Voice input is not supported in this browser"), { code: "unsupported-browser" });
   }
 
-  const stream = await getUserMedia({ audio: true });
+  const stream = await mediaDevices.getUserMedia({ audio: true });
   const fetchImpl = runtime.fetch ?? fetch;
   const AudioContextCtor = runtime.AudioContext ?? runtime.webkitAudioContext;
 

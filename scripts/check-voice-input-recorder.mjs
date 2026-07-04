@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 
 const {
   encodeWav,
-  prefersNativeAudioCapture,
   startVoiceRecording,
   supportsVoiceInput,
 } = await import("../components/voice-input-recorder.ts");
@@ -16,9 +15,6 @@ assert.equal(supportsVoiceInput({
   navigator: { mediaDevices: { getUserMedia: async () => ({}) } },
   AudioContext: class {},
 }), true);
-assert.equal(prefersNativeAudioCapture({ navigator: { userAgent: "CriOS iPhone", platform: "iPhone" } }), true);
-assert.equal(prefersNativeAudioCapture({ navigator: { userAgent: "Chrome Macintosh", platform: "MacIntel", maxTouchPoints: 0 } }), false);
-
 {
   const wav = await encodeWav([Float32Array.from([0, 1, -1])], 16_000).arrayBuffer();
   assert.equal(new TextDecoder().decode(wav.slice(0, 4)), "RIFF");
@@ -53,11 +49,16 @@ assert.equal(prefersNativeAudioCapture({ navigator: { userAgent: "Chrome Macinto
     }
   }
 
-  const runtime = {
-    navigator: { mediaDevices: { getUserMedia: async (constraints) => {
+  const mediaDevices = {
+    async getUserMedia(constraints) {
+      assert.equal(this, mediaDevices, "getUserMedia must be called with navigator.mediaDevices as this");
       assert.deepEqual(constraints, { audio: true });
       return stream;
-    } } },
+    },
+  };
+
+  const runtime = {
+    navigator: { mediaDevices },
     MediaRecorder: FakeMediaRecorder,
     fetch: async (url, init = {}) => {
       calls.push({ url, init });
