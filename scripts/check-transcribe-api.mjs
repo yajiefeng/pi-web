@@ -81,4 +81,40 @@ await withTempAgentDir(async () => {
   }
 }, { openai: { type: "api_key", key: "test-openai-key" } });
 
+await withTempAgentDir(async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ text: "   " }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    const response = await POST(formRequest(audioForm()));
+    const body = await response.json();
+
+    assert.equal(response.status, 422);
+    assert.match(body.error, /no text/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}, { openai: { type: "api_key", key: "test-openai-key" } });
+
+await withTempAgentDir(async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
+    status: 500,
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    const response = await POST(formRequest(audioForm()));
+    const body = await response.json();
+
+    assert.equal(response.status, 502);
+    assert.match(body.error, /transcription failed/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}, { openai: { type: "api_key", key: "test-openai-key" } });
+
 console.log("transcribe api checks passed");

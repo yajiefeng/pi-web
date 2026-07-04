@@ -33,6 +33,10 @@ function stopStream(stream: MediaStream): void {
 }
 
 async function transcribeRecording(blob: Blob, fetchImpl: typeof fetch): Promise<string> {
+  if (blob.size === 0) {
+    throw Object.assign(new Error("No speech was detected"), { code: "empty-audio" });
+  }
+
   const form = new FormData();
   form.set("audio", blob, "voice.webm");
 

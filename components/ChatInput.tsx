@@ -4,7 +4,7 @@ import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, f
 import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError } from "./voice-input-helpers";
+import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError, shouldAutoStopRecording } from "./voice-input-helpers";
 import { startVoiceRecording, supportsVoiceInput, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
@@ -410,6 +410,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     void startVoiceInput();
   }, [startVoiceInput, stopVoiceInput]);
 
+  useEffect(() => {
+    if (!voiceRecording || isTranscribingVoice) return;
+    if (!shouldAutoStopRecording(recordingElapsedSeconds)) return;
+    void stopVoiceInput();
+  }, [isTranscribingVoice, recordingElapsedSeconds, stopVoiceInput, voiceRecording]);
+
   const handleSend = useCallback(async () => {
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
@@ -777,7 +783,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
               <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            {voiceInputError}
+            <span style={{ flex: "1 1 auto", minWidth: 0 }}>{voiceInputError}</span>
+            {voiceInputSupported && !isVoiceBusy && !isStreaming && (
+              <button
+                type="button"
+                onClick={() => { void startVoiceInput(); }}
+                style={{
+                  flexShrink: 0,
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(185,28,28,0.25)",
+                  background: "rgba(255,255,255,0.45)",
+                  color: "inherit",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  fontWeight: 650,
+                }}
+              >
+                Try again
+              </button>
+            )}
           </div>
         )}
         {/* Image previews */}

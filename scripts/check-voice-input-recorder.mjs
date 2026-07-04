@@ -68,4 +68,37 @@ assert.equal(supportsVoiceInput({
   assert.equal(stoppedTracks, 1);
 }
 
+{
+  let fetchCalled = false;
+  const stream = { getTracks: () => [{ stop: () => {} }] };
+
+  class EmptyMediaRecorder {
+    constructor() {
+      this.listeners = new Map();
+    }
+
+    addEventListener(event, handler) {
+      this.listeners.set(event, handler);
+    }
+
+    start() {}
+
+    stop() {
+      this.listeners.get("stop")?.();
+    }
+  }
+
+  const recording = await startVoiceRecording({
+    navigator: { mediaDevices: { getUserMedia: async () => stream } },
+    MediaRecorder: EmptyMediaRecorder,
+    fetch: async () => {
+      fetchCalled = true;
+      return new Response(JSON.stringify({ text: "should not happen" }), { status: 200 });
+    },
+  });
+
+  await assert.rejects(() => recording.stopAndTranscribe(), /no speech/i);
+  assert.equal(fetchCalled, false);
+}
+
 console.log("voice input recorder checks passed");

@@ -13,6 +13,8 @@ export type VoiceInputStatus = {
   ariaLabel: string;
 };
 
+export const VOICE_RECORDING_MAX_SECONDS = 60;
+
 const LEADING_PUNCTUATION = /^[,.;:!?，。！？、；：]/;
 
 const ERROR_MESSAGES: Record<VoiceInputErrorCode, string> = {
@@ -37,6 +39,13 @@ export function formatRecordingDuration(seconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const remainingSeconds = totalSeconds % 60;
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+export function shouldAutoStopRecording(
+  elapsedSeconds: number,
+  maxSeconds = VOICE_RECORDING_MAX_SECONDS,
+): boolean {
+  return elapsedSeconds >= maxSeconds;
 }
 
 export function getVoiceInputStatus({
@@ -90,7 +99,12 @@ export function normalizeVoiceInputError(error: unknown): string {
   if (normalized.includes("openai api key") || normalized.includes("api key") || normalized.includes("not configured")) {
     return ERROR_MESSAGES["missing-openai-key"];
   }
-  if (normalized.includes("no speech") || normalized.includes("empty") || normalized.includes("no text")) {
+  if (
+    normalized.includes("no speech") ||
+    normalized.includes("empty") ||
+    normalized.includes("no text") ||
+    normalized.includes("audio file is required")
+  ) {
     return ERROR_MESSAGES["empty-audio"];
   }
 
