@@ -37,7 +37,7 @@ assert.equal(shouldAutoStopRecording(59), false);
 assert.equal(shouldAutoStopRecording(60), true);
 assert.equal(shouldAutoStopRecording(61), true);
 
-assert.match(normalizeVoiceInputError({ name: "NotAllowedError" }), /microphone permission/i);
+assert.match(normalizeVoiceInputError({ name: "NotAllowedError" }), /site settings.*allow Microphone/i);
 assert.match(normalizeVoiceInputError(new Error("MediaRecorder is not supported")), /not supported/i);
 assert.match(normalizeVoiceInputError(new Error("No transcription API key configured")), /transcription api key/i);
 assert.match(normalizeVoiceInputError(new Error("OpenAI API key is not configured")), /transcription api key/i);
@@ -45,6 +45,6 @@ assert.match(normalizeVoiceInputError(new Error("Transcription returned no text"
 assert.match(normalizeVoiceInputError(new Error("audio file is required")), /no speech/i);
 assert.match(normalizeVoiceInputError(new TypeError("Failed to fetch")), /try again/i);
 assert.match(normalizeVoiceInputError(new Error("something exploded")), /transcription failed/i);
-assert.match(normalizeVoiceInputError({ code: "permission-denied" }), /microphone permission/i);
+assert.match(normalizeVoiceInputError({ code: "permission-denied" }), /site settings.*allow Microphone/i);
 
 console.log("voice input helper checks passed");

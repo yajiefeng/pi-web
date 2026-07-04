@@ -18,7 +18,7 @@ export const VOICE_RECORDING_MAX_SECONDS = 60;
 const LEADING_PUNCTUATION = /^[,.;:!?，。！？、；：]/;
 
 const ERROR_MESSAGES: Record<VoiceInputErrorCode, string> = {
-  "permission-denied": "Microphone permission was denied. Allow microphone access and try again.",
+  "permission-denied": "Browser blocked microphone access for this site. Open the address bar site settings, allow Microphone, then try again.",
   "unsupported-browser": "Voice input is not supported in this browser.",
   "missing-openai-key": "Voice transcription API key is not configured. Add a Volcengine Ark/Doubao or OpenAI API key and try again.",
   "empty-audio": "No speech was detected. Try recording again.",
