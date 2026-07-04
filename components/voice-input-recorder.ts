@@ -310,6 +310,9 @@ export function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
   return new Blob([view], { type: "audio/wav" });
 }
 
+// Fallback recorder for browsers where MediaRecorder is unavailable or its
+// constructor fails. ScriptProcessorNode is deprecated, so keep this path as a
+// compatibility fallback rather than expanding it into the primary recorder.
 function startWebAudioRecording(
   stream: MediaStream,
   AudioContextCtor: AudioContextConstructor,

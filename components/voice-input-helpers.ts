@@ -3,6 +3,7 @@ export type VoiceInputErrorCode =
   | "unsupported-browser"
   | "missing-openai-key"
   | "empty-audio"
+  | "audio-too-large"
   | "transcription-failed";
 
 export type VoiceInputPhase = "idle" | "recording" | "transcribing";
@@ -22,6 +23,7 @@ const ERROR_MESSAGES: Record<VoiceInputErrorCode, string> = {
   "unsupported-browser": "Voice input is not supported in this browser.",
   "missing-openai-key": "Voice transcription API key is not configured. Add a Volcengine Ark/Doubao or OpenAI API key and try again.",
   "empty-audio": "No speech was detected. Try recording again.",
+  "audio-too-large": "Voice recording is too large. Try a shorter recording.",
   "transcription-failed": "Voice transcription failed. Try again.",
 };
 
@@ -111,6 +113,9 @@ export function normalizeVoiceInputError(error: unknown): string {
     normalized.includes("audio file is required")
   ) {
     return ERROR_MESSAGES["empty-audio"];
+  }
+  if (normalized.includes("too large") || normalized.includes("413")) {
+    return ERROR_MESSAGES["audio-too-large"];
   }
 
   return ERROR_MESSAGES["transcription-failed"];

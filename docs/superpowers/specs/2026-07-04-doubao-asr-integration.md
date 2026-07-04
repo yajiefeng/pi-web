@@ -1,6 +1,6 @@
 # Doubao ASR integration for voice input
 
-Voice input uses `POST /api/transcribe` as the only browser-facing endpoint. The browser uploads audio to pi-web; pi-web chooses the server-side transcription provider.
+Voice input uses `POST /api/transcribe` as the only browser-facing endpoint. The browser uploads audio to pi-web; pi-web chooses the server-side transcription provider. The endpoint rejects audio files larger than 10 MiB and request bodies with `Content-Length` above 11 MiB.
 
 ## Provider priority
 
@@ -48,3 +48,7 @@ OpenAI uses the existing `openai` provider API key.
 ## Privacy
 
 The API key stays server-side. Audio is sent from the browser to pi-web and then directly to the selected transcription provider. pi-web does not persist uploaded audio.
+
+## Browser recording note
+
+`MediaRecorder` is the primary browser recording path. The Web Audio PCM/WAV recorder exists only as a compatibility fallback for browsers where `MediaRecorder` is unavailable or unusable.

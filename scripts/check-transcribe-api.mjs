@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { POST } = await import("../app/api/transcribe/route.ts");
+const {
+  MAX_TRANSCRIBE_AUDIO_BYTES,
+  MAX_TRANSCRIBE_REQUEST_BYTES,
+} = await import("../lib/transcription/limits.ts");
 
 function formRequest(form) {
   return new Request("http://localhost/api/transcribe", {
@@ -56,6 +60,28 @@ async function withTempAgentDir(callback, authData = {}, envOverrides = {}) {
 
   assert.equal(response.status, 400);
   assert.match(body.error, /audio/i);
+}
+
+{
+  const response = await POST(new Request("http://localhost/api/transcribe", {
+    method: "POST",
+    body: new FormData(),
+    headers: { "content-length": String(MAX_TRANSCRIBE_REQUEST_BYTES + 1) },
+  }));
+  const body = await response.json();
+
+  assert.equal(response.status, 413);
+  assert.match(body.error, /too large/i);
+}
+
+{
+  const form = new FormData();
+  form.set("audio", new File([new Uint8Array(MAX_TRANSCRIBE_AUDIO_BYTES + 1)], "too-large.wav", { type: "audio/wav" }));
+  const response = await POST(formRequest(form));
+  const body = await response.json();
+
+  assert.equal(response.status, 413);
+  assert.match(body.error, /too large/i);
 }
 
 await withTempAgentDir(async () => {

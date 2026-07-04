@@ -7,10 +7,10 @@ Add first-class voice input to pi-web so a user can dictate a prompt on mobile, 
 First version behavior:
 
 1. User taps a microphone button in `ChatInput`.
-2. Browser records audio with `MediaRecorder`.
+2. Browser records audio with `MediaRecorder`, falling back to Web Audio PCM/WAV only when `MediaRecorder` is unavailable or unusable.
 3. User taps stop, or recording auto-stops after 60 seconds.
 4. Browser uploads the audio blob to pi-web.
-5. Server transcribes with OpenAI using the existing OpenAI provider API key.
+5. Server transcribes with Volcengine Ark / Doubao ASR first, falling back to OpenAI transcription when no Ark/Doubao key is configured.
 6. Transcribed text is appended to the current input draft.
 7. User reviews/edits and manually sends.
 
@@ -73,19 +73,19 @@ The waveform can be CSS/React-driven pseudo animation. It does not need to refle
 
 Mobile-first, but not mobile-only:
 
-- Enable the microphone button when `navigator.mediaDevices.getUserMedia` and `MediaRecorder` are available.
+- Enable the microphone button when `navigator.mediaDevices.getUserMedia` is available and either `MediaRecorder` or Web Audio recording is available.
 - Disable or hide it when unsupported.
 - Primary manual acceptance target: iPhone Chrome.
 
 ### Language
 
-Use OpenAI's automatic language detection. Do not pass a fixed `language` parameter in the first version.
+Use the selected transcription provider's automatic language detection. Do not pass a fixed `language` parameter in the first version.
 
 ## Architecture
 
 ### Client
 
-`ChatInput` owns the browser recording state:
+`ChatInput` currently owns the browser recording state, with the browser/media details hidden behind `components/voice-input-recorder.ts`:
 
 - `idle`
 - `recording`
@@ -95,8 +95,8 @@ Use OpenAI's automatic language detection. Do not pass a fixed `language` parame
 Responsibilities:
 
 - Request microphone permission.
-- Start and stop `MediaRecorder`.
-- Accumulate audio chunks.
+- Start and stop browser recording through the recorder helper.
+- Accumulate audio chunks in `MediaRecorder` or the Web Audio fallback.
 - Enforce the 60-second max duration.
 - Upload the audio blob as multipart form data.
 - Append returned text to the draft.
@@ -114,7 +114,7 @@ Request:
 
 ```text
 multipart/form-data
-file: audio blob
+audio: audio blob
 ```
 
 Successful response:
@@ -126,32 +126,35 @@ Successful response:
 Error response:
 
 ```json
-{ "error": "Configure OpenAI API key" }
+{ "error": "Configure transcription API key" }
 ```
 
 Server responsibilities:
 
 - Validate that a file is present.
-- Enforce a conservative upload size limit.
-- Read the existing OpenAI provider API key from pi-web's auth storage.
-- Call OpenAI transcription.
+- Enforce a conservative upload size limit: 10 MiB for the audio file, with an 11 MiB request `Content-Length` pre-check.
+- Resolve the server-side transcription provider from environment variables or pi-web auth storage.
+- Call the selected transcription provider.
 - Return only the transcript text.
 - Avoid writing uploaded audio to disk.
 
 ### Provider Choice
 
-First version uses OpenAI transcription only.
+Current provider priority:
 
-Use a server-side constant for the transcription model, initially an OpenAI transcription-capable model such as `gpt-4o-mini-transcribe` or `whisper-1`. Keep this separate from the selected chat model so voice input does not affect agent model selection.
+1. Volcengine Ark / Doubao ASR (`doubao-seed-asr-2.0` by default).
+2. OpenAI transcription fallback (`gpt-4o-mini-transcribe` by default).
+
+Keep transcription model selection separate from the selected chat model so voice input does not affect agent model selection.
 
 ### API Key Handling
 
-Reuse the existing OpenAI provider API key managed by pi-web. Do not add a separate transcription key in the first version.
+Volcengine Ark / Doubao ASR keys can come from environment variables or the `volcengine-ark`, `ark`, or `doubao` pi auth providers. OpenAI fallback uses the existing `openai` provider API key.
 
-If no OpenAI key is configured:
+If no transcription provider key is configured:
 
 - The server returns a clear configuration error.
-- The client shows a short message such as `Configure OpenAI API key`.
+- The client shows a short message such as `Configure transcription API key`.
 - The existing draft remains untouched.
 
 ## Error Handling
@@ -162,7 +165,7 @@ Client-facing errors should be short and recoverable:
 | --- | --- |
 | Browser lacks recording APIs | `Voice input is not supported in this browser` |
 | Microphone permission denied | `Microphone permission denied` |
-| OpenAI key missing | `Configure OpenAI API key` |
+| Transcription provider key missing | `Configure transcription API key` |
 | Empty or too-short audio | `No speech detected` |
 | Upload/network/transcription failure | `Transcription failed. Try again.` |
 
@@ -191,7 +194,8 @@ Add tests for client helpers where practical:
 Add a lightweight test script or route-level check for:
 
 - Missing file returns a 400.
-- Missing OpenAI key returns a configuration error.
+- Missing transcription provider key returns a configuration error.
+- Oversized audio upload returns a 413.
 - Unsupported/empty audio maps to `No speech detected` where detectable.
 
 Avoid requiring a real OpenAI API call in normal test runs. Keep real-provider testing manual or gated by environment variables.
@@ -229,7 +233,7 @@ Also test:
 
 ## Open Questions For Later Versions
 
-- Should voice input support multiple transcription providers?
+- Should `ChatInput` voice state move into a dedicated `useVoiceInput()` hook so the component only consumes `supported`, `busy`, `status`, `error`, `start`, and `stop`?
 - Should language selection be added for users who mostly dictate in one language?
 - Should real audio amplitude visualization replace the pseudo waveform?
 - Should Herdr-managed sessions receive voice text through a Herdr message route once Herdr becomes the default runtime?
