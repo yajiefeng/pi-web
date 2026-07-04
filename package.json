@@ -31,6 +31,7 @@
     "lint": "eslint .",
     "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "test:runtime-status": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-runtime-status.mjs",
+    "test:transcribe-api": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-transcribe-api.mjs",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
