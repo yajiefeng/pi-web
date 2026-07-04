@@ -97,6 +97,8 @@ interface ApiKeyProvider {
   configured: boolean;
   source?: string;
   modelCount: number;
+  description?: string;
+  placeholder?: string;
 }
 
 type OAuthLoginState =
@@ -1035,7 +1037,7 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
       <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
         {provider.configured
           ? `API key is stored. Enter a new key below to replace it, or disconnect to remove it.`
-          : `Enter your ${provider.displayName} API key to enable ${provider.modelCount} model${provider.modelCount !== 1 ? "s" : ""}.`}
+          : (provider.description ?? `Enter your ${provider.displayName} API key to enable ${provider.modelCount} model${provider.modelCount !== 1 ? "s" : ""}.`)}
       </p>
 
       <Field label="API Key">
@@ -1044,7 +1046,7 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
             value={apiKey}
             onChange={setApiKey}
             onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
-            placeholder={provider.configured ? "Enter new key to replace…" : "sk-…"}
+            placeholder={provider.configured ? "Enter new key to replace…" : (provider.placeholder ?? "sk-…")}
             style={{ flex: 1 }}
             autoComplete="off"
             spellCheck={false}
@@ -1254,7 +1256,9 @@ function AddProviderPicker({
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.displayName}</div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{p.modelCount} models</div>
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
+                      {p.description ?? `${p.modelCount} model${p.modelCount !== 1 ? "s" : ""}`}
+                    </div>
                   </div>
                   <ProviderIcon id={p.id} size={28} />
                 </button>
