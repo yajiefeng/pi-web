@@ -5,7 +5,7 @@ import type { BuiltinSlashCommandResult, CompactResultInfo, SlashCommandInfo } f
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { appendVoiceTranscript, getVoiceInputStatus, normalizeVoiceInputError, shouldAutoStopRecording } from "./voice-input-helpers";
-import { startVoiceRecording, supportsVoiceInput, type VoiceRecording } from "./voice-input-recorder";
+import { startVoiceRecording, supportsVoiceInput, transcribeVoiceAudio, type VoiceRecording } from "./voice-input-recorder";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -181,6 +181,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const voiceRecordingRef = useRef<VoiceRecording | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
@@ -360,6 +361,22 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
+  const transcribeNativeAudioFile = useCallback(async (file: File) => {
+    if (isStreaming || isTranscribingVoice || voiceRecordingRef.current) return;
+
+    setVoiceInputError(null);
+    setIsTranscribingVoice(true);
+
+    try {
+      const transcript = await transcribeVoiceAudio(file, file.name || "voice.wav");
+      appendTranscriptToDraft(transcript);
+    } catch (error) {
+      setVoiceInputError(normalizeVoiceInputError(error));
+    } finally {
+      setIsTranscribingVoice(false);
+    }
+  }, [appendTranscriptToDraft, isStreaming, isTranscribingVoice]);
+
   const stopVoiceInput = useCallback(async () => {
     const recording = voiceRecordingRef.current;
     if (!recording || isTranscribingVoice) return;
@@ -407,8 +424,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       void stopVoiceInput();
       return;
     }
+    if (!voiceInputSupported) {
+      audioInputRef.current?.click();
+      return;
+    }
     void startVoiceInput();
-  }, [startVoiceInput, stopVoiceInput]);
+  }, [startVoiceInput, stopVoiceInput, voiceInputSupported]);
 
   useEffect(() => {
     if (!voiceRecording || isTranscribingVoice) return;
@@ -744,6 +765,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           e.target.value = "";
         }}
       />
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/*"
+        capture={true}
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const [file] = Array.from(e.target.files ?? []);
+          e.target.value = "";
+          if (file) void transcribeNativeAudioFile(file);
+        }}
+      />
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
         {/* Retry banner */}
         {retryInfo && (
@@ -784,10 +817,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             <span style={{ flex: "1 1 auto", minWidth: 0 }}>{voiceInputError}</span>
-            {voiceInputSupported && !isVoiceBusy && !isStreaming && (
+            {!isVoiceBusy && !isStreaming && (
               <button
                 type="button"
-                onClick={() => { void startVoiceInput(); }}
+                onClick={() => {
+                  if (voiceInputSupported) void startVoiceInput();
+                  else audioInputRef.current?.click();
+                }}
                 style={{
                   flexShrink: 0,
                   padding: "3px 8px",
@@ -1127,13 +1163,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
-              {voiceInputSupported && (
-                <button
-                  type="button"
-                  onClick={handleVoiceInputClick}
-                  disabled={isTranscribingVoice}
-                  title={voiceRecording ? "Stop voice recording" : "Voice input"}
-                  aria-label={voiceRecording ? "Stop voice recording" : "Start voice recording"}
+              <button
+                type="button"
+                onClick={handleVoiceInputClick}
+                disabled={isTranscribingVoice}
+                title={voiceRecording ? "Stop voice recording" : voiceInputSupported ? "Voice input" : "Select or record audio"}
+                aria-label={voiceRecording ? "Stop voice recording" : voiceInputSupported ? "Start voice recording" : "Select or record audio"}
                   style={{
                     flexShrink: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
@@ -1159,7 +1194,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     </svg>
                   )}
                 </button>
-              )}
               <button
                 onClick={handleSend}
                 disabled={isVoiceBusy || (!value.trim() && !attachedImages.length)}
