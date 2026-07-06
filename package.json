@@ -36,6 +36,7 @@
     "test:herdr-pending-timeout": "node scripts/check-herdr-pending-timeout.mjs",
     "test:herdr-readonly-ui": "node scripts/check-herdr-readonly-ui.mjs",
     "test:herdr-web-fallback": "node scripts/check-herdr-web-fallback.mjs",
+    "test:herdr-mobile-acceptance": "node scripts/check-herdr-mobile-acceptance.mjs",
     "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "test:runtime-status": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-runtime-status.mjs",
     "test:transcribe-api": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-transcribe-api.mjs",
