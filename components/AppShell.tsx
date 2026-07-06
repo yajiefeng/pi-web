@@ -19,10 +19,14 @@ import type { RuntimeStatusSnapshot } from "@/lib/runtime-status/types";
 
 type SessionCopyField = "file" | "id";
 
-type PendingHerdrSession =
-  | { cwd: string; state: "creating"; agentId?: string; agentLabel?: string; error?: string }
-  | { cwd: string; state: "created"; agentId: string; agentLabel: string; error?: string }
-  | { cwd: string; state: "error"; agentId?: string; agentLabel?: string; error: string };
+type PendingHerdrSession = {
+  cwd: string;
+  state: "creating" | "created" | "error" | "timed_out";
+  startedAt: number;
+  agentId?: string;
+  agentLabel?: string;
+  error?: string;
+};
 
 type HerdrAgentCreationResponse = {
   ok?: boolean;
@@ -32,6 +36,8 @@ type HerdrAgentCreationResponse = {
   cwd?: string;
   error?: string;
 };
+
+const PENDING_HERDR_TIMEOUT_MS = 15_000;
 
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -234,9 +240,11 @@ export function AppShell() {
     const requestId = pendingHerdrRequestIdRef.current + 1;
     pendingHerdrRequestIdRef.current = requestId;
 
+    const startedAt = Date.now();
+
     setSelectedSession(null);
     setNewSessionCwd(null);
-    setPendingHerdrSession({ cwd, state: "creating" });
+    setPendingHerdrSession({ cwd, state: "creating", startedAt });
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);
@@ -262,24 +270,81 @@ export function AppShell() {
         setPendingHerdrSession((current) => {
           if (pendingHerdrRequestIdRef.current !== requestId || current?.cwd !== cwd) return current;
           return {
+            ...current,
             cwd,
-            state: "created",
+            state: current.state === "timed_out" ? "timed_out" : "created",
             agentId,
             agentLabel,
+            error: undefined,
           };
         });
       } catch (error) {
         setPendingHerdrSession((current) => {
           if (pendingHerdrRequestIdRef.current !== requestId || current?.cwd !== cwd) return current;
           return {
+            ...current,
             cwd,
-            state: "error",
+            state: current.state === "timed_out" ? "timed_out" : "error",
             error: error instanceof Error ? error.message : String(error),
           };
         });
       }
     })();
   }, [router, isMobile]);
+
+  useEffect(() => {
+    if (!pendingHerdrSession || pendingHerdrSession.state === "error" || pendingHerdrSession.state === "timed_out") return;
+    const elapsed = Date.now() - pendingHerdrSession.startedAt;
+    const remaining = Math.max(0, PENDING_HERDR_TIMEOUT_MS - elapsed);
+    const timeout = setTimeout(() => {
+      setPendingHerdrSession((current) => {
+        if (!current || current.startedAt !== pendingHerdrSession.startedAt) return current;
+        if (current.state === "error" || current.state === "timed_out") return current;
+        return { ...current, state: "timed_out" };
+      });
+    }, remaining);
+    return () => clearTimeout(timeout);
+  }, [pendingHerdrSession]);
+
+  const handleRetryPendingHerdrSession = useCallback(() => {
+    if (!pendingHerdrSession) return;
+    handleNewSession(pendingHerdrSession.cwd);
+  }, [pendingHerdrSession, handleNewSession]);
+
+  const handleCreateWebSessionInstead = useCallback(() => {
+    if (!pendingHerdrSession) return;
+    const cwd = pendingHerdrSession.cwd;
+    pendingHerdrRequestIdRef.current += 1;
+    setPendingHerdrSession(null);
+    setSelectedSession(null);
+    setNewSessionCwd(cwd);
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setSystemPrompt(null);
+    setActiveTopPanel(null);
+    if (isMobile) setSidebarOpen(false);
+    router.replace("/", { scroll: false });
+  }, [pendingHerdrSession, router, isMobile]);
+
+  const handleFocusPendingHerdrAgent = useCallback(async () => {
+    const agentId = pendingHerdrSession?.agentId;
+    if (!agentId) return;
+    try {
+      const res = await fetch("/api/runtime/herdr/focus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId }),
+      });
+      const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!res.ok || data.ok === false) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setPendingHerdrSession((current) => current?.agentId === agentId ? { ...current, error: undefined } : current);
+    } catch (error) {
+      setPendingHerdrSession((current) => current?.agentId === agentId
+        ? { ...current, error: error instanceof Error ? error.message : String(error) }
+        : current);
+    }
+  }, [pendingHerdrSession?.agentId]);
 
   const openBoundHerdrSession = useCallback(async (
     sessionId: string,
@@ -306,7 +371,7 @@ export function AppShell() {
   }, [router, isMobile]);
 
   useEffect(() => {
-    if (pendingHerdrSession?.state !== "created" || !pendingHerdrSession.agentId) return;
+    if (!pendingHerdrSession?.agentId || (pendingHerdrSession.state !== "created" && pendingHerdrSession.state !== "timed_out")) return;
 
     let cancelled = false;
 
@@ -1072,6 +1137,9 @@ export function AppShell() {
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
               pendingHerdrSession={pendingHerdrSession}
+              onFocusPendingHerdrAgent={handleFocusPendingHerdrAgent}
+              onTryHerdrAgain={handleRetryPendingHerdrSession}
+              onCreateWebSessionInstead={handleCreateWebSessionInstead}
               onAgentEnd={handleAgentEnd}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}

@@ -13,7 +13,8 @@ import type { SessionStatsInfo } from "@/lib/pi-types";
 
 interface PendingHerdrSession {
   cwd: string;
-  state: "creating" | "created" | "error";
+  state: "creating" | "created" | "error" | "timed_out";
+  startedAt?: number;
   agentId?: string;
   agentLabel?: string;
   error?: string;
@@ -23,6 +24,9 @@ interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
   pendingHerdrSession?: PendingHerdrSession | null;
+  onFocusPendingHerdrAgent?: () => void;
+  onTryHerdrAgain?: () => void;
+  onCreateWebSessionInstead?: () => void;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
   onSessionForked?: (newSessionId: string) => void;
@@ -107,12 +111,25 @@ function Typewriter({ phrases }: { phrases: string[] }) {
   );
 }
 
-function PendingHerdrSessionView({ pendingHerdrSession }: { pendingHerdrSession: PendingHerdrSession }) {
-  const statusText = pendingHerdrSession.state === "error"
-    ? "Herdr agent creation failed."
-    : pendingHerdrSession.state === "created"
-      ? "Herdr agent created. Waiting for Session Binding..."
-      : "Starting Herdr agent...";
+function PendingHerdrSessionView({
+  pendingHerdrSession,
+  onFocusPendingHerdrAgent,
+  onTryHerdrAgain,
+  onCreateWebSessionInstead,
+}: {
+  pendingHerdrSession: PendingHerdrSession;
+  onFocusPendingHerdrAgent?: () => void;
+  onTryHerdrAgain?: () => void;
+  onCreateWebSessionInstead?: () => void;
+}) {
+  const statusText = pendingHerdrSession.state === "timed_out"
+    ? "No Session Binding appeared within 15 seconds."
+    : pendingHerdrSession.state === "error"
+      ? "Herdr agent creation failed."
+      : pendingHerdrSession.state === "created"
+        ? "Herdr agent created. Waiting for Session Binding..."
+        : "Starting Herdr agent...";
+  const showActions = pendingHerdrSession.state === "timed_out" || pendingHerdrSession.state === "error";
 
   return (
     <div className="flex h-full items-center justify-center px-4 py-8">
@@ -164,13 +181,74 @@ function PendingHerdrSessionView({ pendingHerdrSession }: { pendingHerdrSession:
           {pendingHerdrSession.error && (
             <div style={{ color: "#f87171" }}>{pendingHerdrSession.error}</div>
           )}
+          {showActions && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+              {pendingHerdrSession.agentId && onFocusPendingHerdrAgent && (
+                <button
+                  type="button"
+                  onClick={onFocusPendingHerdrAgent}
+                  style={{
+                    height: 34,
+                    borderRadius: 9,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-hover)",
+                    color: "var(--text)",
+                    padding: "0 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Focus Herdr agent
+                </button>
+              )}
+              {onTryHerdrAgain && (
+                <button
+                  type="button"
+                  onClick={onTryHerdrAgain}
+                  style={{
+                    height: 34,
+                    borderRadius: 9,
+                    border: "1px solid rgba(37,99,235,0.45)",
+                    background: "rgba(37,99,235,0.12)",
+                    color: "var(--accent)",
+                    padding: "0 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Try Herdr again
+                </button>
+              )}
+              {onCreateWebSessionInstead && (
+                <button
+                  type="button"
+                  onClick={onCreateWebSessionInstead}
+                  style={{
+                    height: 34,
+                    borderRadius: 9,
+                    border: "1px solid var(--border)",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    padding: "0 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Create web session instead
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
   const {
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
@@ -307,7 +385,14 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onAgen
   const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
 
   if (pendingHerdrSession) {
-    return <PendingHerdrSessionView pendingHerdrSession={pendingHerdrSession} />;
+    return (
+      <PendingHerdrSessionView
+        pendingHerdrSession={pendingHerdrSession}
+        onFocusPendingHerdrAgent={onFocusPendingHerdrAgent}
+        onTryHerdrAgain={onTryHerdrAgain}
+        onCreateWebSessionInstead={onCreateWebSessionInstead}
+      />
+    );
   }
 
   if (loading) {
