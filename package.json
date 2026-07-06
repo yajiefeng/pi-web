@@ -32,6 +32,7 @@
     "test:auth-providers": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-auth-providers.mjs",
     "test:herdr-agent-creation": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-herdr-agent-creation.mjs",
     "test:herdr-pending-ui": "node scripts/check-herdr-pending-ui.mjs",
+    "test:herdr-pending-resolution": "node scripts/check-herdr-pending-resolution.mjs",
     "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "test:runtime-status": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-runtime-status.mjs",
     "test:transcribe-api": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-transcribe-api.mjs",

@@ -15,6 +15,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { RuntimeStatusSnapshot } from "@/lib/runtime-status/types";
 
 type SessionCopyField = "file" | "id";
 
@@ -279,6 +280,68 @@ export function AppShell() {
       }
     })();
   }, [router, isMobile]);
+
+  const openBoundHerdrSession = useCallback(async (
+    sessionId: string,
+    shouldOpen: () => boolean = () => true,
+  ): Promise<boolean> => {
+    const res = await fetch("/api/sessions");
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => ({})) as { sessions?: SessionInfo[] };
+    const session = data.sessions?.find((item) => item.id === sessionId);
+    if (!session || !shouldOpen()) return false;
+
+    setNewSessionCwd(null);
+    setPendingHerdrSession(null);
+    setSelectedSession(session);
+    setRefreshKey((k) => k + 1);
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setSystemPrompt(null);
+    setActiveTopPanel(null);
+    if (isMobile) setSidebarOpen(false);
+    router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+    return true;
+  }, [router, isMobile]);
+
+  useEffect(() => {
+    if (pendingHerdrSession?.state !== "created" || !pendingHerdrSession.agentId) return;
+
+    let cancelled = false;
+
+    const resolveSnapshot = (snapshot: RuntimeStatusSnapshot) => {
+      const agent = snapshot.herdrAgents.find((agent) => agent.id === pendingHerdrSession.agentId);
+      if (!agent) return;
+      const sessionId = agent.sessionId ?? Object.values(snapshot.sessions).find((status) => status.herdrAgentId === agent.id)?.sessionId;
+      if (!sessionId) return;
+      void openBoundHerdrSession(sessionId, () => !cancelled);
+    };
+
+    void fetch("/api/runtime/status")
+      .then((res) => res.ok ? res.json() : null)
+      .then((snapshot: RuntimeStatusSnapshot | null) => {
+        if (!cancelled && snapshot) resolveSnapshot(snapshot);
+      })
+      .catch(() => {});
+
+    const source = new EventSource("/api/runtime/status/events");
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as { type?: string; snapshot?: RuntimeStatusSnapshot };
+        if (!cancelled && data.type === "runtime_status" && data.snapshot) {
+          resolveSnapshot(data.snapshot);
+        }
+      } catch {
+        // ignore malformed runtime-status frames
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [pendingHerdrSession, openBoundHerdrSession]);
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo) => {
