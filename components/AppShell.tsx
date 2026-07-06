@@ -18,6 +18,20 @@ import type { SessionStatsInfo } from "@/lib/pi-types";
 
 type SessionCopyField = "file" | "id";
 
+type PendingHerdrSession =
+  | { cwd: string; state: "creating"; agentId?: string; agentLabel?: string; error?: string }
+  | { cwd: string; state: "created"; agentId: string; agentLabel: string; error?: string }
+  | { cwd: string; state: "error"; agentId?: string; agentLabel?: string; error: string };
+
+type HerdrAgentCreationResponse = {
+  ok?: boolean;
+  agentId?: string;
+  agentLabel?: string;
+  pending?: boolean;
+  cwd?: string;
+  error?: string;
+};
+
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -43,8 +57,10 @@ export function AppShell() {
   const { isDark, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
-  // When user clicks +, we only store the cwd — no fake session id
+  // Explicit web-managed fallback sessions still use this cwd. The default + New
+  // path stores a Pending Herdr Session instead.
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
+  const [pendingHerdrSession, setPendingHerdrSession] = useState<PendingHerdrSession | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
@@ -64,6 +80,7 @@ export function AppShell() {
   }, []);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const pendingHerdrRequestIdRef = useRef(0);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -179,6 +196,10 @@ export function AppShell() {
       if (prev && prev !== cwd) return null;
       return prev;
     });
+    setPendingHerdrSession((prev) => {
+      if (prev && prev.cwd !== cwd) return null;
+      return prev;
+    });
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);
@@ -189,6 +210,7 @@ export function AppShell() {
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
     setNewSessionCwd(null);
+    setPendingHerdrSession(null);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
     setSystemPrompt(null);
@@ -207,9 +229,13 @@ export function AppShell() {
     }
   }, [router, isMobile]);
 
-  const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+  const handleNewSession = useCallback((cwd: string) => {
+    const requestId = pendingHerdrRequestIdRef.current + 1;
+    pendingHerdrRequestIdRef.current = requestId;
+
     setSelectedSession(null);
-    setNewSessionCwd(cwd);
+    setNewSessionCwd(null);
+    setPendingHerdrSession({ cwd, state: "creating" });
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);
@@ -217,11 +243,47 @@ export function AppShell() {
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/runtime/herdr/agents", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd }),
+        });
+        const data = await res.json().catch(() => ({})) as HerdrAgentCreationResponse;
+        if (!res.ok || data.ok === false) throw new Error(data.error ?? `HTTP ${res.status}`);
+        const agentId = data.agentId;
+        const agentLabel = data.agentLabel;
+        if (typeof agentId !== "string" || typeof agentLabel !== "string") {
+          throw new Error("Herdr agent creation response did not include an agent id and label.");
+        }
+        setPendingHerdrSession((current) => {
+          if (pendingHerdrRequestIdRef.current !== requestId || current?.cwd !== cwd) return current;
+          return {
+            cwd,
+            state: "created",
+            agentId,
+            agentLabel,
+          };
+        });
+      } catch (error) {
+        setPendingHerdrSession((current) => {
+          if (pendingHerdrRequestIdRef.current !== requestId || current?.cwd !== cwd) return current;
+          return {
+            cwd,
+            state: "error",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        });
+      }
+    })();
   }, [router, isMobile]);
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo) => {
     setNewSessionCwd(null);
+    setPendingHerdrSession(null);
     setSelectedSession(session);
     setRefreshKey((k) => k + 1);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
@@ -236,6 +298,7 @@ export function AppShell() {
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
+    setPendingHerdrSession(null);
     setSelectedSession((prev) => ({
       ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" }),
       id: newSessionId,
@@ -253,6 +316,7 @@ export function AppShell() {
       const cwd = selectedSession.cwd;
       setSelectedSession(null);
       setNewSessionCwd(cwd ?? null);
+      setPendingHerdrSession(null);
       setSessionKey((k) => k + 1);
       setBranchTree([]);
       setBranchActiveLeafId(null);
@@ -292,9 +356,10 @@ export function AppShell() {
     window.location.href = `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
   }, [selectedSession]);
 
-  // Show chat area if a session is selected, or if we have a cwd to start a new session in
-  const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
-  const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  // Show chat area if a session is selected, if Herdr creation is pending, or
+  // if we have a cwd to start an explicit web-managed fallback session in.
+  const effectiveNewSessionCwd = pendingHerdrSession ? null : newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
+  const showChat = selectedSession !== null || pendingHerdrSession !== null || effectiveNewSessionCwd !== null;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
@@ -310,7 +375,7 @@ export function AppShell() {
         onInitialRestoreDone={handleInitialRestoreDone}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
-        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+        selectedCwd={selectedSession?.cwd ?? pendingHerdrSession?.cwd ?? newSessionCwd ?? null}
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}
         explorerRefreshKey={explorerRefreshKey}
@@ -335,7 +400,7 @@ export function AppShell() {
           {
             label: "Skills",
             onClick: () => setSkillsConfigOpen(true),
-            disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
+            disabled: !activeCwd && !selectedSession?.cwd && !pendingHerdrSession?.cwd && !newSessionCwd,
             icon: (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -347,7 +412,7 @@ export function AppShell() {
           {
             label: "Plugins",
             onClick: () => setPluginsConfigOpen(true),
-            disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
+            disabled: !activeCwd && !selectedSession?.cwd && !pendingHerdrSession?.cwd && !newSessionCwd,
             icon: (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 7V2" />
@@ -943,6 +1008,7 @@ export function AppShell() {
               key={sessionKey}
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
+              pendingHerdrSession={pendingHerdrSession}
               onAgentEnd={handleAgentEnd}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}
@@ -1033,12 +1099,12 @@ export function AppShell() {
       </svg>
     </button>
     {modelsConfigOpen && <ModelsConfig onClose={() => { setModelsConfigOpen(false); setModelsRefreshKey((k) => k + 1); }} />}
-    {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
-      <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
+    {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? pendingHerdrSession?.cwd ?? newSessionCwd) && (
+      <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? pendingHerdrSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
     )}
-    {pluginsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
+    {pluginsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? pendingHerdrSession?.cwd ?? newSessionCwd) && (
       <PluginsConfig
-        cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!}
+        cwd={(activeCwd ?? selectedSession?.cwd ?? pendingHerdrSession?.cwd ?? newSessionCwd)!}
         sessionId={selectedSession?.id ?? null}
         onClose={() => setPluginsConfigOpen(false)}
         onReloaded={() => setSessionKey((k) => k + 1)}

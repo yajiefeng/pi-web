@@ -11,9 +11,18 @@ import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
+interface PendingHerdrSession {
+  cwd: string;
+  state: "creating" | "created" | "error";
+  agentId?: string;
+  agentLabel?: string;
+  error?: string;
+}
+
 interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
+  pendingHerdrSession?: PendingHerdrSession | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
   onSessionForked?: (newSessionId: string) => void;
@@ -98,7 +107,70 @@ function Typewriter({ phrases }: { phrases: string[] }) {
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
+function PendingHerdrSessionView({ pendingHerdrSession }: { pendingHerdrSession: PendingHerdrSession }) {
+  const statusText = pendingHerdrSession.state === "error"
+    ? "Herdr agent creation failed."
+    : pendingHerdrSession.state === "created"
+      ? "Herdr agent created. Waiting for Session Binding..."
+      : "Starting Herdr agent...";
+
+  return (
+    <div className="flex h-full items-center justify-center px-4 py-8">
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 560,
+          border: "1px solid var(--border)",
+          borderRadius: 16,
+          background: "var(--bg-panel)",
+          padding: 24,
+          boxShadow: "0 18px 50px rgba(0,0,0,0.16)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          <div
+            aria-hidden="true"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 999,
+              background: "color-mix(in srgb, var(--accent) 16%, transparent)",
+              color: "var(--accent)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            H
+          </div>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>Pending Herdr Session</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{statusText}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 10, fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
+          <div>
+            pi-web started a Herdr-owned runtime for this project and is Waiting for Session Binding before opening the linked Pi session.
+          </div>
+          <div style={{ display: "grid", gap: 6, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+            <div><span style={{ color: "var(--text-dim)" }}>cwd:</span> <span style={{ color: "var(--text)" }}>{pendingHerdrSession.cwd}</span></div>
+            {pendingHerdrSession.agentLabel && (
+              <div><span style={{ color: "var(--text-dim)" }}>Herdr agent:</span> <span style={{ color: "var(--text)" }}>{pendingHerdrSession.agentLabel}</span></div>
+            )}
+          </div>
+          {pendingHerdrSession.error && (
+            <div style={{ color: "#f87171" }}>{pendingHerdrSession.error}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
   const {
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
@@ -233,6 +305,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
 
   const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");
   const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
+
+  if (pendingHerdrSession) {
+    return <PendingHerdrSessionView pendingHerdrSession={pendingHerdrSession} />;
+  }
 
   if (loading) {
     return (
