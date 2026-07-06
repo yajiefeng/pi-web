@@ -20,10 +20,17 @@ interface PendingHerdrSession {
   error?: string;
 }
 
+interface ReadOnlyHerdrSession {
+  agentId: string;
+  agentLabel?: string;
+}
+
 interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
   pendingHerdrSession?: PendingHerdrSession | null;
+  readOnlyHerdrSession?: ReadOnlyHerdrSession | null;
+  onFocusReadOnlyHerdrAgent?: () => void;
   onFocusPendingHerdrAgent?: () => void;
   onTryHerdrAgain?: () => void;
   onCreateWebSessionInstead?: () => void;
@@ -108,6 +115,63 @@ function Typewriter({ phrases }: { phrases: string[] }) {
       {text}
       <span style={{ opacity: caretOn ? 1 : 0, color: "var(--accent)", marginLeft: 1 }}>▍</span>
     </span>
+  );
+}
+
+function ReadOnlyHerdrSessionComposer({
+  readOnlyHerdrSession,
+  onFocusReadOnlyHerdrAgent,
+}: {
+  readOnlyHerdrSession: ReadOnlyHerdrSession;
+  onFocusReadOnlyHerdrAgent?: () => void;
+}) {
+  return (
+    <div style={{ flexShrink: 0, padding: "0 16px 8px", paddingRight: 52 }}>
+      <div style={{ maxWidth: 820, margin: "0 auto" }}>
+        <div
+          style={{
+            border: "1px solid color-mix(in srgb, var(--accent) 24%, var(--border))",
+            borderRadius: 14,
+            background: "color-mix(in srgb, var(--accent) 7%, var(--bg-panel))",
+            padding: 14,
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 0, flex: "1 1 280px" }}>
+            <div style={{ fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>Read-only Herdr Session</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.55 }}>
+              This session is Herdr-owned, and web command routing is not available yet. Send messages from the Herdr pane.
+              {readOnlyHerdrSession.agentLabel && (
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)", marginLeft: 6 }}>{readOnlyHerdrSession.agentLabel}</span>
+              )}
+            </div>
+          </div>
+          {onFocusReadOnlyHerdrAgent && (
+            <button
+              type="button"
+              onClick={onFocusReadOnlyHerdrAgent}
+              style={{
+                height: 34,
+                borderRadius: 9,
+                border: "1px solid rgba(37,99,235,0.45)",
+                background: "rgba(37,99,235,0.12)",
+                color: "var(--accent)",
+                padding: "0 12px",
+                fontSize: 12,
+                fontWeight: 650,
+                cursor: "pointer",
+              }}
+            >
+              Focus Herdr agent
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -248,7 +312,7 @@ function PendingHerdrSessionView({
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOnlyHerdrSession, onFocusReadOnlyHerdrAgent, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
   const {
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
@@ -380,6 +444,12 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocu
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
     />
   );
+  const composerElement = readOnlyHerdrSession ? (
+    <ReadOnlyHerdrSessionComposer
+      readOnlyHerdrSession={readOnlyHerdrSession}
+      onFocusReadOnlyHerdrAgent={onFocusReadOnlyHerdrAgent}
+    />
+  ) : chatInputElement;
 
   const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");
   const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
@@ -497,7 +567,7 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocu
               </div>
             </div>
             <NoticeShelf notices={notices} align="right" />
-            {chatInputElement}
+            {composerElement}
           </div>
         </div>
       ) : (
@@ -563,9 +633,9 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocu
                     toolResults={toolResultsMap}
                     modelNames={modelNames}
                     entryId={entryIds[idx]}
-                    onFork={agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
+                    onFork={readOnlyHerdrSession ? undefined : agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
                     forking={forkingEntryId === entryIds[idx]}
-                    onNavigate={agentRunning ? undefined : handleNavigate}
+                    onNavigate={readOnlyHerdrSession ? undefined : agentRunning ? undefined : handleNavigate}
                     prevAssistantEntryId={agentRunning ? undefined : prevAssistantEntryId}
                     onEditContent={(content) => chatInputRef?.current?.insertIfEmpty(content)}
                     showTimestamp={showTimestamp}
@@ -623,7 +693,7 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, onFocu
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>
         </div>
-        {chatInputElement}
+        {composerElement}
       </div>
       </>
       )}

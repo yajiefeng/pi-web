@@ -68,6 +68,7 @@ export function AppShell() {
   // path stores a Pending Herdr Session instead.
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [pendingHerdrSession, setPendingHerdrSession] = useState<PendingHerdrSession | null>(null);
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
@@ -168,6 +169,35 @@ export function AppShell() {
     ro.observe(topBarRef.current);
     return () => ro.disconnect();
   }, [activeTopPanel]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const applySnapshot = (snapshot: RuntimeStatusSnapshot) => {
+      if (!cancelled) setRuntimeSnapshot(snapshot);
+    };
+
+    void fetch("/api/runtime/status")
+      .then((res) => res.ok ? res.json() : null)
+      .then((snapshot: RuntimeStatusSnapshot | null) => {
+        if (snapshot) applySnapshot(snapshot);
+      })
+      .catch(() => {});
+
+    const source = new EventSource("/api/runtime/status/events");
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as { type?: string; snapshot?: RuntimeStatusSnapshot };
+        if (data.type === "runtime_status" && data.snapshot) applySnapshot(data.snapshot);
+      } catch {
+        // ignore malformed runtime-status frames
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, []);
 
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
@@ -371,6 +401,7 @@ export function AppShell() {
   }, [router, isMobile]);
 
   useEffect(() => {
+    if (!runtimeSnapshot) return;
     if (!pendingHerdrSession?.agentId || (pendingHerdrSession.state !== "created" && pendingHerdrSession.state !== "timed_out")) return;
 
     let cancelled = false;
@@ -383,30 +414,12 @@ export function AppShell() {
       void openBoundHerdrSession(sessionId, () => !cancelled);
     };
 
-    void fetch("/api/runtime/status")
-      .then((res) => res.ok ? res.json() : null)
-      .then((snapshot: RuntimeStatusSnapshot | null) => {
-        if (!cancelled && snapshot) resolveSnapshot(snapshot);
-      })
-      .catch(() => {});
-
-    const source = new EventSource("/api/runtime/status/events");
-    source.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as { type?: string; snapshot?: RuntimeStatusSnapshot };
-        if (!cancelled && data.type === "runtime_status" && data.snapshot) {
-          resolveSnapshot(data.snapshot);
-        }
-      } catch {
-        // ignore malformed runtime-status frames
-      }
-    };
+    resolveSnapshot(runtimeSnapshot);
 
     return () => {
       cancelled = true;
-      source.close();
     };
-  }, [pendingHerdrSession, openBoundHerdrSession]);
+  }, [runtimeSnapshot, pendingHerdrSession, openBoundHerdrSession]);
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo) => {
@@ -483,6 +496,24 @@ export function AppShell() {
     if (!selectedSession) return;
     window.location.href = `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
   }, [selectedSession]);
+
+  const selectedSessionRuntimeStatus = selectedSession ? runtimeSnapshot?.sessions[selectedSession.id] : undefined;
+  const readOnlyHerdrAgentId = selectedSessionRuntimeStatus?.herdrAgentId ?? null;
+  const readOnlyHerdrSession = readOnlyHerdrAgentId
+    ? {
+        agentId: readOnlyHerdrAgentId,
+        agentLabel: selectedSessionRuntimeStatus?.herdrLabel,
+      }
+    : null;
+
+  const handleFocusReadOnlyHerdrAgent = useCallback(() => {
+    if (!readOnlyHerdrAgentId) return;
+    void fetch("/api/runtime/herdr/focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: readOnlyHerdrAgentId }),
+    });
+  }, [readOnlyHerdrAgentId]);
 
   // Show chat area if a session is selected, if Herdr creation is pending, or
   // if we have a cwd to start an explicit web-managed fallback session in.
@@ -1137,6 +1168,8 @@ export function AppShell() {
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
               pendingHerdrSession={pendingHerdrSession}
+              readOnlyHerdrSession={readOnlyHerdrSession}
+              onFocusReadOnlyHerdrAgent={handleFocusReadOnlyHerdrAgent}
               onFocusPendingHerdrAgent={handleFocusPendingHerdrAgent}
               onTryHerdrAgain={handleRetryPendingHerdrSession}
               onCreateWebSessionInstead={handleCreateWebSessionInstead}
