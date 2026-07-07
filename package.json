@@ -33,6 +33,7 @@
     "test:auth-providers": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-auth-providers.mjs",
     "test:herdr-agent-creation": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-herdr-agent-creation.mjs",
     "test:herdr-bridge-routing": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-herdr-bridge-routing.mjs",
+    "test:herdr-bridge-ui": "node scripts/check-herdr-bridge-ui.mjs",
     "test:herdr-pending-ui": "node scripts/check-herdr-pending-ui.mjs",
     "test:herdr-pending-resolution": "node scripts/check-herdr-pending-resolution.mjs",
     "test:herdr-pending-timeout": "node scripts/check-herdr-pending-timeout.mjs",

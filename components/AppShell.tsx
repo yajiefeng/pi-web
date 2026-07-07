@@ -498,7 +498,7 @@ export function AppShell() {
   }, [selectedSession]);
 
   const selectedSessionRuntimeStatus = selectedSession ? runtimeSnapshot?.sessions[selectedSession.id] : undefined;
-  const readOnlyHerdrAgentId = selectedSessionRuntimeStatus?.herdrAgentId ?? null;
+  const readOnlyHerdrAgentId = selectedSessionRuntimeStatus?.herdrAgentId && !selectedSessionRuntimeStatus?.bridgeCapable ? selectedSessionRuntimeStatus.herdrAgentId : null;
   const readOnlyHerdrSession = readOnlyHerdrAgentId
     ? {
         agentId: readOnlyHerdrAgentId,
