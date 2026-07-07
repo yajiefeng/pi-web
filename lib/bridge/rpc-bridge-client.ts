@@ -61,29 +61,36 @@ export function getDefaultBridgeRegistryDir(): string {
   return process.env.PI_WEB_RPC_BRIDGE_REGISTRY_DIR || join(homedir(), ".pi", "agent", "pi-web-rpc-bridge", "registry");
 }
 
-export async function findBridgeRegistryForSession(
-  session: BridgeSessionReference,
+export async function listBridgeRegistries(
   options: BridgeRegistryLookupOptions = {},
-): Promise<BridgeRegistryEntry | null> {
+): Promise<BridgeRegistryEntry[]> {
   const registryDir = options.registryDir ?? getDefaultBridgeRegistryDir();
   let files: string[];
   try {
     files = await readdir(registryDir);
   } catch {
-    return null;
+    return [];
   }
 
-  const candidates: BridgeRegistryEntry[] = [];
+  const entries: BridgeRegistryEntry[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     const entry = await readRegistryEntry(join(registryDir, file));
     if (!entry) continue;
     if (!isLiveRegistry(entry)) continue;
-    if (!registryMatchesSession(entry, session)) continue;
-    candidates.push(entry);
+    entries.push(entry);
   }
 
-  candidates.sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
+  entries.sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
+  return entries;
+}
+
+export async function findBridgeRegistryForSession(
+  session: BridgeSessionReference,
+  options: BridgeRegistryLookupOptions = {},
+): Promise<BridgeRegistryEntry | null> {
+  const candidates = (await listBridgeRegistries(options))
+    .filter((entry) => registryMatchesSession(entry, session));
   return candidates[0] ?? null;
 }
 

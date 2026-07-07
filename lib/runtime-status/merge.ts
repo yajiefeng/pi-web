@@ -1,3 +1,4 @@
+import { inferSessionIdFromSessionPath } from "./session-binding.ts";
 import type { HerdrAgentRuntimeStatus, HerdrHealth, RpcSessionRuntimeStatus, RuntimeStatus, RuntimeStatusSnapshot, SessionRuntimeReference, SessionRuntimeStatus } from "./types";
 
 const STATUS_PRIORITY: Record<RuntimeStatus, number> = {
@@ -37,7 +38,9 @@ export function mergeRuntimeStatuses(input: {
   }
 
   for (const agent of input.herdrAgents) {
-    const sessionId = agent.sessionId ?? (agent.sessionPath ? sessionIdByPath.get(agent.sessionPath) : undefined);
+    const sessionId = agent.sessionId
+      ?? (agent.sessionPath ? sessionIdByPath.get(agent.sessionPath) : undefined)
+      ?? inferSessionIdFromSessionPath(agent.sessionPath);
     if (!sessionId) continue;
 
     const existing = sessions[sessionId];

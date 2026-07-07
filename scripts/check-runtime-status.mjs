@@ -155,6 +155,20 @@ function herdr(overrides = {}) {
 }
 
 {
+  const sessionPath = "/tmp/sessions/2026-07-07T08-40-57-303Z_019f3bbc-ced6-754a-b5a6-bd1e0608737e.jsonl";
+  const snapshot = mergeRuntimeStatuses({
+    rpcSessions: [],
+    sessionRefs: [],
+    herdrAgents: [herdr({ sessionId: undefined, sessionPath, status: "idle" })],
+    herdrHealth: "ok",
+  });
+
+  assert.equal(snapshot.sessions["019f3bbc-ced6-754a-b5a6-bd1e0608737e"]?.status, "idle");
+  assert.equal(snapshot.sessions["019f3bbc-ced6-754a-b5a6-bd1e0608737e"]?.sessionFile, sessionPath);
+  assert.equal(snapshot.sessions["019f3bbc-ced6-754a-b5a6-bd1e0608737e"]?.herdrAgentId, "agent-1");
+}
+
+{
   const calls = [];
   await focusHerdrAgent("term-123", {
     timeoutMs: 42,
@@ -181,6 +195,13 @@ function herdr(overrides = {}) {
       [{ sessionId: "path-session", sessionFile: "/tmp/path-session.jsonl" }],
     ),
     "path-session",
+  );
+  assert.equal(
+    resolveHerdrAgentSessionId(
+      herdr({ sessionId: undefined, sessionPath: "/tmp/2026-07-07T08-40-57-303Z_019f3bbc-ced6-754a-b5a6-bd1e0608737e.jsonl" }),
+      [],
+    ),
+    "019f3bbc-ced6-754a-b5a6-bd1e0608737e",
   );
 }
 

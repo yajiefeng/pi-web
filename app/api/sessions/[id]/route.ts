@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { findBridgeRegistryForSession } from "@/lib/bridge/rpc-bridge-client";
 import {
   resolveSessionPath,
   invalidateSessionPathCache,
@@ -12,6 +13,12 @@ import { getRpcSession } from "@/lib/rpc-manager";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
+
+function createdFromSessionFile(sessionFile: string): string | undefined {
+  const filename = sessionFile.split(/[\\/]/).pop() ?? "";
+  const raw = filename.match(/^(.*?)_[^_\\/]+\.jsonl$/)?.[1];
+  return raw ? raw.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z") : undefined;
+}
 
 /**
  * Project the session tree into the shallow navigation tree sent to the client.
@@ -116,9 +123,37 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
-    const filePath = await resolveSessionPath(id);
+    let filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      const bridge = await findBridgeRegistryForSession({ sessionId: id });
+      if (!bridge?.sessionFile) {
+        return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      }
+      filePath = bridge.sessionFile;
+      if (!existsSync(filePath)) {
+        const created = createdFromSessionFile(filePath) ?? bridge.updatedAt ?? new Date().toISOString();
+        return NextResponse.json({
+          sessionId: id,
+          filePath,
+          info: {
+            path: filePath,
+            id,
+            cwd: bridge.cwd ?? "",
+            created,
+            modified: bridge.updatedAt ?? created,
+            messageCount: 0,
+            firstMessage: "(no messages)",
+          },
+          leafId: null,
+          tree: [],
+          context: {
+            messages: [],
+            entryIds: [],
+            thinkingLevel: "off",
+            model: null,
+          },
+        });
+      }
     }
 
     const sm = SessionManager.open(filePath);
