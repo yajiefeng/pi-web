@@ -79,7 +79,7 @@ type AgentStateResponse = {
   extensionWidgets?: ExtensionWidgetItem[];
 };
 
-const INITIAL_SESSION_MESSAGE_LIMIT = 300;
+const INITIAL_SESSION_MESSAGE_LIMIT = 50;
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;

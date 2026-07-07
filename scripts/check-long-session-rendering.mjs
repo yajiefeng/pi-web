@@ -5,7 +5,7 @@ const chatWindow = readFileSync("components/ChatWindow.tsx", "utf8");
 const hook = readFileSync("hooks/useAgentSession.ts", "utf8");
 const sessionRoute = readFileSync("app/api/sessions/[id]/route.ts", "utf8");
 
-assert.match(hook, /INITIAL_SESSION_MESSAGE_LIMIT = 300/, "Session loading should cap initial long-session payloads");
+assert.match(hook, /INITIAL_SESSION_MESSAGE_LIMIT = 50/, "Session loading should cap initial long-session payloads");
 assert.match(hook, /messageLimit/, "Session loading should request a server-side message limit");
 assert.match(hook, /loadAllMessages/, "Users should be able to request the full session after initial tail load");
 assert.match(sessionRoute, /limitSessionContext/, "Session API should support tail-limited contexts");
