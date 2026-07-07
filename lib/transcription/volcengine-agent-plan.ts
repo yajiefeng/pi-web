@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
-import WebSocket from "ws";
+import type WebSocket from "ws";
 import type { RawData } from "ws";
 
 const execFileAsync = promisify(execFile);
@@ -326,6 +326,11 @@ export async function transcribeWithVolcengineAgentPlan(
   audio: File,
   provider: VolcengineAgentPlanProvider,
 ): Promise<string> {
+  // Next.js production bundling can mis-handle ws' optional native bufferutil path.
+  // Force ws to use its pure-JS mask implementation before loading the module.
+  process.env.WS_NO_BUFFER_UTIL ??= "1";
+  const { default: WebSocketImpl } = await import("ws");
+
   const wav = await convertToWav(audio);
   const segmentDurationMs = envNumber("VOLCENGINE_ASR_SEGMENT_DURATION_MS", DEFAULT_SEGMENT_DURATION_MS);
   const segmentDelayMs = envNumber("VOLCENGINE_ASR_SEGMENT_DELAY_MS", 0);
@@ -340,7 +345,7 @@ export async function transcribeWithVolcengineAgentPlan(
     let senderStarted = false;
 
     const connectId = randomUUID();
-    const websocket = new WebSocket(provider.endpoint, {
+    const websocket: WebSocket = new WebSocketImpl(provider.endpoint, {
       headers: {
         "X-Api-Key": provider.apiKey,
         "X-Api-Resource-Id": provider.resourceId,
@@ -353,7 +358,7 @@ export async function transcribeWithVolcengineAgentPlan(
     const cleanup = () => {
       clearTimeout(timer);
       websocket.removeAllListeners();
-      if (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING) {
+      if (websocket.readyState === WebSocketImpl.OPEN || websocket.readyState === WebSocketImpl.CONNECTING) {
         websocket.close();
       }
     };
@@ -373,7 +378,7 @@ export async function transcribeWithVolcengineAgentPlan(
     const sendSegments = async () => {
       try {
         for (let index = 0; index < segments.length; index += 1) {
-          if (settled || websocket.readyState !== WebSocket.OPEN) return;
+          if (settled || websocket.readyState !== WebSocketImpl.OPEN) return;
           const isLast = index === segments.length - 1;
           websocket.send(buildAudioOnlyRequest(seq, segments[index], isLast));
           if (!isLast) seq += 1;

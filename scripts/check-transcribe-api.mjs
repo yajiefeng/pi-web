@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -18,6 +18,11 @@ const {
   VOLCENGINE_AGENT_PLAN_DEFAULT_RESOURCE_ID,
   VOLCENGINE_AGENT_PLAN_DEFAULT_WS_URL,
 } = await import("../lib/transcription/volcengine-agent-plan.ts");
+
+const volcengineSource = readFileSync("lib/transcription/volcengine-agent-plan.ts", "utf8");
+assert.match(volcengineSource, /WS_NO_BUFFER_UTIL/, "Volcengine ASR should disable ws native bufferutil in production Next runtime");
+assert.match(volcengineSource, /await import\("ws"\)/, "Volcengine ASR should load ws after disabling native bufferutil");
+assert.doesNotMatch(volcengineSource, /import WebSocket from "ws"/, "Volcengine ASR should not statically import ws before WS_NO_BUFFER_UTIL is set");
 
 function formRequest(form) {
   return new Request("http://localhost/api/transcribe", {
