@@ -73,6 +73,33 @@ try {
 
   {
     const calls = [];
+    const sessionFile = join(tmp, "existing-session.jsonl");
+    const result = await startHerdrAgent({ cwd: projectDir, sessionFile, random: () => "b7c8" }, {
+      run: async (args, options) => {
+        calls.push({ args, timeoutMs: options.timeoutMs });
+        return {
+          stdout: JSON.stringify({
+            id: "cli:agent:start",
+            result: {
+              agent: {
+                terminal_id: "term-session",
+                pane_id: "w1:p3",
+                name: "pi-web-pi-web-herdr-create-test-b7c8",
+                agent_status: "unknown",
+              },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+
+    assert.equal(result.agentId, "term-session");
+    assert.deepEqual(calls[0].args.slice(-5), ["pi", "--mode", "rpc", "--session", sessionFile], "Bridge should launch Pi RPC for the exact selected session file");
+  }
+
+  {
+    const calls = [];
     const result = await startHerdrAgent({ cwd: projectDir, random: () => "c9d0" }, {
       run: async (args, options) => {
         calls.push({ args, timeoutMs: options.timeoutMs });

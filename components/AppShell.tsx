@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
@@ -499,12 +499,12 @@ export function AppShell() {
 
   const selectedSessionRuntimeStatus = selectedSession ? runtimeSnapshot?.sessions[selectedSession.id] : undefined;
   const readOnlyHerdrAgentId = selectedSessionRuntimeStatus?.herdrAgentId && !selectedSessionRuntimeStatus?.bridgeCapable ? selectedSessionRuntimeStatus.herdrAgentId : null;
-  const readOnlyHerdrSession = readOnlyHerdrAgentId
+  const readOnlyHerdrSession = useMemo(() => readOnlyHerdrAgentId
     ? {
         agentId: readOnlyHerdrAgentId,
         agentLabel: selectedSessionRuntimeStatus?.herdrLabel,
       }
-    : null;
+    : null, [readOnlyHerdrAgentId, selectedSessionRuntimeStatus?.herdrLabel]);
 
   const handleFocusReadOnlyHerdrAgent = useCallback(() => {
     if (!readOnlyHerdrAgentId) return;
@@ -514,6 +514,43 @@ export function AppShell() {
       body: JSON.stringify({ agentId: readOnlyHerdrAgentId }),
     });
   }, [readOnlyHerdrAgentId]);
+
+  const handleMigrateReadOnlyHerdrSession = useCallback(async () => {
+    if (!selectedSession || !readOnlyHerdrSession) return;
+    pendingHerdrRequestIdRef.current += 1;
+
+    const res = await fetch("/api/runtime/herdr/migrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: selectedSession.id,
+        sessionFile: selectedSession.path,
+        oldAgentId: readOnlyHerdrSession.agentId,
+        confirmStopOldAgent: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({})) as HerdrAgentCreationResponse & { sessionId?: string; sessionFile?: string; migrated?: boolean; previousAgentId?: string };
+    if (!res.ok || data.ok === false) throw new Error(data.error ?? `HTTP ${res.status}`);
+    const agentId = data.agentId;
+    const agentLabel = data.agentLabel;
+    const cwd = data.cwd ?? selectedSession.cwd;
+    if (typeof agentId !== "string" || typeof agentLabel !== "string") {
+      throw new Error("Herdr migration response did not include a new agent id and label.");
+    }
+
+    const startedAt = Date.now();
+    setSelectedSession(null);
+    setNewSessionCwd(null);
+    setPendingHerdrSession({ cwd, state: "created", startedAt, agentId, agentLabel });
+    setRefreshKey((k) => k + 1);
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setSystemPrompt(null);
+    setActiveTopPanel(null);
+    if (isMobile) setSidebarOpen(false);
+    router.replace("/", { scroll: false });
+  }, [selectedSession, readOnlyHerdrSession, router, isMobile]);
 
   // Show chat area if a session is selected, if Herdr creation is pending, or
   // if we have a cwd to start an explicit web-managed fallback session in.
@@ -1170,6 +1207,7 @@ export function AppShell() {
               pendingHerdrSession={pendingHerdrSession}
               readOnlyHerdrSession={readOnlyHerdrSession}
               onFocusReadOnlyHerdrAgent={handleFocusReadOnlyHerdrAgent}
+              onMigrateReadOnlyHerdrSession={handleMigrateReadOnlyHerdrSession}
               onFocusPendingHerdrAgent={handleFocusPendingHerdrAgent}
               onTryHerdrAgain={handleRetryPendingHerdrSession}
               onCreateWebSessionInstead={handleCreateWebSessionInstead}

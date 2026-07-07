@@ -31,6 +31,7 @@ interface Props {
   pendingHerdrSession?: PendingHerdrSession | null;
   readOnlyHerdrSession?: ReadOnlyHerdrSession | null;
   onFocusReadOnlyHerdrAgent?: () => void;
+  onMigrateReadOnlyHerdrSession?: () => Promise<void> | void;
   onFocusPendingHerdrAgent?: () => void;
   onTryHerdrAgain?: () => void;
   onCreateWebSessionInstead?: () => void;
@@ -121,10 +122,34 @@ function Typewriter({ phrases }: { phrases: string[] }) {
 function ReadOnlyHerdrSessionComposer({
   readOnlyHerdrSession,
   onFocusReadOnlyHerdrAgent,
+  onMigrateReadOnlyHerdrSession,
 }: {
   readOnlyHerdrSession: ReadOnlyHerdrSession;
   onFocusReadOnlyHerdrAgent?: () => void;
+  onMigrateReadOnlyHerdrSession?: () => Promise<void> | void;
 }) {
+  const [migrating, setMigrating] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+
+  const handleRestartAsBridge = useCallback(async () => {
+    if (!onMigrateReadOnlyHerdrSession) return;
+    const confirmed = window.confirm(
+      "Restart as bridge session?\n\n" +
+      "pi-web will stop the existing Herdr TUI runtime before starting a bridge-owned Pi RPC runtime for this exact session file.\n\n" +
+      "This preserves the single writer rule: the old TUI process and the new bridge process must not write the same session at the same time.",
+    );
+    if (!confirmed) return;
+    setMigrating(true);
+    setMigrationError(null);
+    try {
+      await onMigrateReadOnlyHerdrSession();
+    } catch (error) {
+      setMigrationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMigrating(false);
+    }
+  }, [onMigrateReadOnlyHerdrSession]);
+
   return (
     <div style={{ flexShrink: 0, padding: "0 16px 8px", paddingRight: 52 }}>
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
@@ -144,31 +169,57 @@ function ReadOnlyHerdrSessionComposer({
           <div style={{ minWidth: 0, flex: "1 1 280px" }}>
             <div style={{ fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>Read-only Herdr Session</div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.55 }}>
-              This session is Herdr-owned, and web command routing is not available yet. Send messages from the Herdr pane.
+              This session is Herdr-owned, and web command routing is not available yet. Send messages from the Herdr pane, or restart it as a bridge session after confirming pi-web may stop the old TUI runtime.
               {readOnlyHerdrSession.agentLabel && (
                 <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)", marginLeft: 6 }}>{readOnlyHerdrSession.agentLabel}</span>
               )}
             </div>
+            {migrationError && (
+              <div style={{ color: "#f87171", fontSize: 12, marginTop: 6 }}>{migrationError}</div>
+            )}
           </div>
-          {onFocusReadOnlyHerdrAgent && (
-            <button
-              type="button"
-              onClick={onFocusReadOnlyHerdrAgent}
-              style={{
-                height: 34,
-                borderRadius: 9,
-                border: "1px solid rgba(37,99,235,0.45)",
-                background: "rgba(37,99,235,0.12)",
-                color: "var(--accent)",
-                padding: "0 12px",
-                fontSize: 12,
-                fontWeight: 650,
-                cursor: "pointer",
-              }}
-            >
-              Focus Herdr agent
-            </button>
-          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {onFocusReadOnlyHerdrAgent && (
+              <button
+                type="button"
+                onClick={onFocusReadOnlyHerdrAgent}
+                style={{
+                  height: 34,
+                  borderRadius: 9,
+                  border: "1px solid rgba(37,99,235,0.45)",
+                  background: "rgba(37,99,235,0.12)",
+                  color: "var(--accent)",
+                  padding: "0 12px",
+                  fontSize: 12,
+                  fontWeight: 650,
+                  cursor: "pointer",
+                }}
+              >
+                Focus Herdr agent
+              </button>
+            )}
+            {onMigrateReadOnlyHerdrSession && (
+              <button
+                type="button"
+                onClick={() => void handleRestartAsBridge()}
+                disabled={migrating}
+                style={{
+                  height: 34,
+                  borderRadius: 9,
+                  border: "1px solid color-mix(in srgb, var(--accent) 55%, var(--border))",
+                  background: migrating ? "var(--bg-hover)" : "var(--accent)",
+                  color: migrating ? "var(--text-muted)" : "white",
+                  padding: "0 12px",
+                  fontSize: 12,
+                  fontWeight: 650,
+                  cursor: migrating ? "default" : "pointer",
+                  opacity: migrating ? 0.75 : 1,
+                }}
+              >
+                {migrating ? "Restarting..." : "Restart as bridge session"}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -312,7 +363,7 @@ function PendingHerdrSessionView({
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOnlyHerdrSession, onFocusReadOnlyHerdrAgent, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOnlyHerdrSession, onFocusReadOnlyHerdrAgent, onMigrateReadOnlyHerdrSession, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
   const {
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
@@ -448,6 +499,7 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
     <ReadOnlyHerdrSessionComposer
       readOnlyHerdrSession={readOnlyHerdrSession}
       onFocusReadOnlyHerdrAgent={onFocusReadOnlyHerdrAgent}
+      onMigrateReadOnlyHerdrSession={onMigrateReadOnlyHerdrSession}
     />
   ) : chatInputElement;
 

@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { execPath } from "node:process";
 import { promisify } from "node:util";
 import { parseHerdrAgentList, type HerdrCommandRunner } from "./herdr-adapter.ts";
+import type { HerdrAgentRuntimeStatus } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 const HERDR_BIN = process.env.HERDR_BIN || "herdr";
@@ -14,6 +15,7 @@ type RandomString = () => string;
 
 export interface StartHerdrAgentInput {
   cwd: string;
+  sessionFile?: string;
   random?: RandomString;
   bridgeCommand?: string[];
 }
@@ -61,7 +63,12 @@ export async function startHerdrAgent(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const agentLabel = generatePiWebHerdrAgentName(input.cwd, { random: input.random });
   const bridgeCommand = input.bridgeCommand ?? resolvePiWebRpcBridgeCommand();
-  const args = ["agent", "start", agentLabel, "--cwd", input.cwd, "--", ...bridgeCommand, "--", "pi", "--mode", "rpc"];
+  const args = [
+    "agent", "start", agentLabel, "--cwd", input.cwd, "--",
+    ...bridgeCommand,
+    "--", "pi", "--mode", "rpc",
+    ...(input.sessionFile ? ["--session", input.sessionFile] : []),
+  ];
 
   let startOutput: { stdout: string; stderr: string };
   try {
@@ -98,6 +105,22 @@ export async function startHerdrAgent(
   }
 
   throw new HerdrControlError(502, "Started Herdr agent, but could not resolve its id");
+}
+
+export async function closeHerdrAgentPane(
+  agent: Pick<HerdrAgentRuntimeStatus, "id" | "paneId" | "label">,
+  options: { run?: HerdrCommandRunner; timeoutMs?: number } = {},
+): Promise<void> {
+  const target = (agent.paneId || agent.id || "").trim();
+  if (!target) throw new HerdrControlError(409, "Cannot close old Herdr runtime because no pane id was reported");
+
+  const run = options.run ?? runHerdr;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  try {
+    await run(["pane", "close", target], { timeoutMs });
+  } catch (error) {
+    throw mapHerdrControlError(error, `Failed to close old Herdr runtime ${agent.label || agent.id}`);
+  }
 }
 
 async function runHerdr(args: string[], options: { timeoutMs: number }): Promise<{ stdout: string; stderr: string }> {

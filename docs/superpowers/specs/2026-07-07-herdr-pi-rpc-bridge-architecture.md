@@ -126,9 +126,12 @@ A safe migration flow must:
 1. Start from the selected exact session id/path.
 2. Identify the exact Herdr agent binding for the old TUI runtime.
 3. Require explicit user confirmation before stopping/replacing the old runtime.
-4. Start a new bridge-owned Herdr runtime for the same session file only after the old writer is stopped or otherwise proven safe.
-5. Wait for the new Herdr agent to report `agent_session_id` or `agent_session_path`.
-6. Enable composer only after the new bridge capability and exact binding are present.
+4. Stop the old Herdr pane, then verify the old agent/session binding is released.
+5. Start a new bridge-owned Herdr runtime for the same session file only after the old writer is stopped or otherwise proven safe.
+6. Wait for the new Herdr agent to report `agent_session_id` or `agent_session_path`.
+7. Enable composer only after the new bridge capability and exact binding are present.
+
+The implemented flow is `/api/runtime/herdr/migrate`: it requires `sessionId`, `sessionFile`, `oldAgentId`, and `confirmStopOldAgent: true`; closes the exact old Herdr pane; refuses if the old binding remains active; then starts `pi-web-rpc-bridge -- pi --mode rpc --session <sessionFile>`.
 
 Pi-web must not infer migration targets from cwd/latest/timestamp matching.
 
