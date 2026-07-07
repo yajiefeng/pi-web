@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
 
+const bridgeSource = readFileSync("bin/pi-web-rpc-bridge.js", "utf8");
+assert.match(bridgeSource, /COMPACT_RPC_TIMEOUT_MS/, "Bridge should allow long-running Pi RPC compaction");
+assert.match(bridgeSource, /rpcTimeoutForCommand\(rpcPayload\.type\)/, "Bridge should use command-specific Pi RPC timeouts");
+
 const tmp = mkdtempSync(join(tmpdir(), "pi-web-rpc-bridge-"));
 const socketDir = join(tmp, "sockets");
 const registryDir = join(tmp, "registry");

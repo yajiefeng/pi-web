@@ -17,6 +17,9 @@ async function getHerdrOwnedSession(sessionId: string): Promise<{ herdrAgentId: 
   }
 }
 
+const BRIDGE_COMPACT_TIMEOUT_MS = 10 * 60 * 1000;
+const BRIDGE_DEFAULT_COMMAND_TIMEOUT_MS = 60 * 1000;
+
 const BRIDGE_COMMAND_TYPES = new Set([
   "prompt",
   "steer",
@@ -48,6 +51,10 @@ function bridgeErrorStatus(errorCode: string | undefined): number {
   if (errorCode === "unsupported_command") return 409;
   if (errorCode === "child_exited") return 503;
   return 502;
+}
+
+function getBridgeCommandTimeoutMs(commandType: string): number {
+  return commandType === "compact" ? BRIDGE_COMPACT_TIMEOUT_MS : BRIDGE_DEFAULT_COMMAND_TIMEOUT_MS;
 }
 
 function buildBridgeCommand(body: { type: string; [key: string]: unknown }, capabilities: string[]): { type: string; [key: string]: unknown } | null {
@@ -89,7 +96,7 @@ async function sendHerdrBridgeCommand(
     expectedSessionId: sessionId,
     ...(sessionFile ? { expectedSessionFile: sessionFile } : {}),
     command,
-  });
+  }, { timeoutMs: getBridgeCommandTimeoutMs(command.type) });
 
   return { bridge, command, response };
 }

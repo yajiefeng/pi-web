@@ -12,7 +12,8 @@ const readline = require("node:readline");
 
 const DEFAULT_BASE_DIR = path.join(os.homedir(), ".pi", "agent", "pi-web-rpc-bridge");
 const DEFAULT_SOURCE = "pi-web-rpc-bridge";
-const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
+const COMPACT_RPC_TIMEOUT_MS = 10 * 60 * 1000;
 
 function usage() {
   return `Usage: pi-web-rpc-bridge [options] [-- <pi-rpc-command...>]
@@ -275,6 +276,10 @@ async function main() {
     broadcastBridgeEvent(message);
   });
 
+  function rpcTimeoutForCommand(commandType) {
+    return commandType === "compact" ? COMPACT_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
+  }
+
   function sendRpcCommand(command, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
     if (childExited) throw new Error("Pi RPC child has exited");
     if (!child.stdin.writable) throw new Error("Pi RPC stdin is not writable");
@@ -372,7 +377,7 @@ async function main() {
 
     const rpcPayload = buildRpcPayload(command);
     try {
-      const rpcResponse = await sendRpcCommand(rpcPayload);
+      const rpcResponse = await sendRpcCommand(rpcPayload, rpcTimeoutForCommand(rpcPayload.type));
       if (!rpcResponse.success) {
         return createErrorResponse(id, "pi_rpc_rejected", rpcResponse.error || "Pi RPC rejected command", currentSession);
       }

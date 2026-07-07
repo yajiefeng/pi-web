@@ -110,6 +110,8 @@ try {
     assert.match(agentRoute, new RegExp(command), `Agent route should support bridge command ${command}`);
   }
   assert.match(agentRoute, /response\.data/, "Agent route should return Pi RPC data for bridge commands like compact/get_commands/get_state");
+  assert.match(agentRoute, /BRIDGE_COMPACT_TIMEOUT_MS/, "Agent route should allow long-running bridge compaction to complete");
+  assert.match(agentRoute, /getBridgeCommandTimeoutMs\(command\.type\)/, "Agent route should pass command-specific bridge timeouts");
   assert.match(agentRoute, /startRpcSession\(id, filePath, cwd\)/, "Agent route should preserve pi-web-managed fallback path");
   assert.match(agentEventsRoute, /subscribeBridgeEvents/, "Agent events route should subscribe to bridge events for bridge-owned Herdr sessions");
   assert.match(agentEventsRoute, /findBridgeRegistryForSession/, "Agent events route should look up exact bridge registry before starting fallback RPC");
