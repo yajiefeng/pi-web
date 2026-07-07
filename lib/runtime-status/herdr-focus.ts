@@ -1,4 +1,5 @@
-import type { HerdrAgentRuntimeStatus, HerdrStatusSnapshot, SessionRuntimeReference } from "./types";
+import { resolveHerdrAgentSessionId } from "./session-binding.ts";
+import type { HerdrStatusSnapshot, SessionRuntimeReference } from "./types";
 
 export interface HerdrFocusResult {
   ok: true;
@@ -40,7 +41,7 @@ export async function focusHerdrAgentById(input: {
   }
 
   await input.focus(agent.id);
-  const sessionId = resolveSessionId(agent, input.sessionRefs);
+  const sessionId = resolveHerdrAgentSessionId(agent, input.sessionRefs);
 
   return {
     ok: true,
@@ -49,10 +50,4 @@ export async function focusHerdrAgentById(input: {
     ...(sessionId ? { sessionId } : {}),
     linked: Boolean(sessionId),
   };
-}
-
-function resolveSessionId(agent: HerdrAgentRuntimeStatus, sessionRefs: SessionRuntimeReference[]): string | undefined {
-  if (agent.sessionId) return agent.sessionId;
-  if (!agent.sessionPath) return undefined;
-  return sessionRefs.find((ref) => ref.sessionFile === agent.sessionPath)?.sessionId;
 }

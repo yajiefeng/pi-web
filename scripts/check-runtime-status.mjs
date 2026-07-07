@@ -237,6 +237,23 @@ function herdr(overrides = {}) {
 {
   const focused = [];
   const result = await focusHerdrAgentById({
+    agentId: "agent-1",
+    getSnapshot: async () => ({
+      health: "ok",
+      agents: [herdr({ sessionId: undefined, sessionPath: "/tmp/2026-07-07T08-40-57-303Z_019f3bbc-ced6-754a-b5a6-bd1e0608737e.jsonl" })],
+    }),
+    focus: async (agentId) => { focused.push(agentId); },
+    sessionRefs: [],
+  });
+
+  assert.deepEqual(focused, ["agent-1"]);
+  assert.equal(result.sessionId, "019f3bbc-ced6-754a-b5a6-bd1e0608737e");
+  assert.equal(result.linked, true);
+}
+
+{
+  const focused = [];
+  const result = await focusHerdrAgentById({
     agentId: "agent-2",
     getSnapshot: async () => ({
       health: "ok",
