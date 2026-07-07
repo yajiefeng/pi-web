@@ -39,6 +39,8 @@ export interface SessionRuntimeStatus {
   herdrAgentId?: string;
   herdrLabel?: string;
   bridgeCapable?: boolean;
+  bridgeProtocolVersion?: number;
+  bridgeCapabilities?: string[];
 }
 
 export interface RuntimeStatusSnapshot {

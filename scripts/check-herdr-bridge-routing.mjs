@@ -32,6 +32,7 @@ const server = net.createServer((socket) => {
       command: receivedRequest.command.type,
       sessionId: "route-session",
       sessionFile,
+      data: receivedRequest.command.type === "get_commands" ? { commands: [{ name: "hello", source: "extension" }] } : undefined,
     }) + "\n");
   });
 });
@@ -45,6 +46,7 @@ await new Promise((resolve, reject) => {
 });
 
 try {
+  const capabilities = ["prompt", "steer", "follow_up", "abort", "compact", "get_state", "get_commands", "set_model", "set_thinking_level", "set_auto_compaction", "set_auto_retry", "extension_ui_response"];
   writeFileSync(join(registryDir, "route-session.json"), JSON.stringify({
     version: 1,
     pid: process.pid,
@@ -54,8 +56,8 @@ try {
     sessionId: "route-session",
     sessionFile,
     protocol: "pi-web-rpc-bridge",
-    protocolVersion: 1,
-    capabilities: ["prompt"],
+    protocolVersion: 2,
+    capabilities,
     updatedAt: new Date().toISOString(),
   }, null, 2));
 
@@ -68,7 +70,7 @@ try {
   assert.equal(registry.sessionId, "route-session");
   assert.equal(registry.sessionFile, sessionFile);
   assert.equal(registry.socketPath, socketPath);
-  assert.deepEqual(registry.capabilities, ["prompt"]);
+  assert.deepEqual(registry.capabilities, capabilities);
 
   const mismatch = await findBridgeRegistryForSession({
     sessionId: "wrong-session",
@@ -80,7 +82,7 @@ try {
     id: "route-command-1",
     expectedSessionId: "route-session",
     expectedSessionFile: sessionFile,
-    command: { type: "prompt", message: "hello through bridge" },
+    command: { type: "prompt", message: "hello through bridge", streamingBehavior: "followUp" },
   }, { timeoutMs: 5000 });
 
   assert.equal(response.accepted, true);
@@ -89,15 +91,30 @@ try {
   assert.equal(receivedRequest.token, token, "bridge client should include registry token");
   assert.equal(receivedRequest.expectedSessionId, "route-session");
   assert.equal(receivedRequest.expectedSessionFile, sessionFile);
-  assert.deepEqual(receivedRequest.command, { type: "prompt", message: "hello through bridge" });
+  assert.deepEqual(receivedRequest.command, { type: "prompt", message: "hello through bridge", streamingBehavior: "followUp" });
+
+  const commandsResponse = await sendBridgeCommand(registry, {
+    id: "route-command-2",
+    expectedSessionId: "route-session",
+    expectedSessionFile: sessionFile,
+    command: { type: "get_commands" },
+  }, { timeoutMs: 5000 });
+  assert.equal(commandsResponse.accepted, true);
+  assert.deepEqual(commandsResponse.data, { commands: [{ name: "hello", source: "extension" }] });
 
   const agentRoute = readFileSync("app/api/agent/[id]/route.ts", "utf8");
+  const agentEventsRoute = readFileSync("app/api/agent/[id]/events/route.ts", "utf8");
   assert.match(agentRoute, /findBridgeRegistryForSession/, "Agent route should look up bridge registry for Herdr-owned sessions");
   assert.match(agentRoute, /sendBridgeCommand/, "Agent route should send prompt commands through the bridge client");
-  assert.match(agentRoute, /bridge/i, "Agent route should preserve bridge-specific error handling");
+  for (const command of capabilities) {
+    assert.match(agentRoute, new RegExp(command), `Agent route should support bridge command ${command}`);
+  }
+  assert.match(agentRoute, /response\.data/, "Agent route should return Pi RPC data for bridge commands like compact/get_commands/get_state");
   assert.match(agentRoute, /startRpcSession\(id, filePath, cwd\)/, "Agent route should preserve pi-web-managed fallback path");
-  assert.doesNotMatch(agentRoute, /agent send|pane send-text|pane send-keys|pane send-input|pane run/i,
-    "Agent route must not use terminal-keystroke fallback for Herdr-owned command routing");
+  assert.match(agentEventsRoute, /subscribeBridgeEvents/, "Agent events route should subscribe to bridge events for bridge-owned Herdr sessions");
+  assert.match(agentEventsRoute, /findBridgeRegistryForSession/, "Agent events route should look up exact bridge registry before starting fallback RPC");
+  assert.doesNotMatch(`${agentRoute}\n${agentEventsRoute}`, /agent send|pane send-text|pane send-keys|pane send-input|pane run/i,
+    "Agent routes must not use terminal-keystroke fallback for Herdr-owned command routing");
 
   console.log("Herdr bridge routing checks passed");
 } finally {

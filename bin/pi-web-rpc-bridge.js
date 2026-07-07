@@ -137,6 +137,31 @@ async function main() {
   let currentSession;
   let registryPath;
   const socketPath = path.join(options.socketDir, `bridge-${process.pid}.sock`);
+  const subscribers = new Set();
+  const capabilities = [
+    "prompt",
+    "steer",
+    "follow_up",
+    "abort",
+    "compact",
+    "get_state",
+    "get_commands",
+    "set_model",
+    "get_available_models",
+    "set_thinking_level",
+    "set_steering_mode",
+    "set_follow_up_mode",
+    "set_auto_compaction",
+    "set_auto_retry",
+    "abort_retry",
+    "abort_bash",
+    "get_session_stats",
+    "get_fork_messages",
+    "get_last_assistant_text",
+    "set_session_name",
+    "get_messages",
+    "extension_ui_response",
+  ];
   let server;
   let childExited = false;
   let shuttingDown = false;
@@ -204,10 +229,24 @@ async function main() {
     });
   }
 
+  function broadcastBridgeEvent(event) {
+    const line = serializeJsonLine(event);
+    for (const subscriber of subscribers) {
+      try {
+        subscriber.write(line);
+      } catch {
+        subscribers.delete(subscriber);
+      }
+    }
+  }
+
   function updateStateFromEvent(event) {
     if (!event || typeof event !== "object") return;
     if (["agent_start", "turn_start", "message_start", "tool_execution_start", "compaction_start", "auto_retry_start"].includes(event.type)) {
       reportHerdr("working");
+    }
+    if (event.type === "extension_ui_request" && ["select", "confirm", "input", "editor"].includes(event.method)) {
+      reportHerdr("blocked", `Waiting for ${event.method} response`);
     }
     if (["agent_end", "compaction_end", "auto_retry_end"].includes(event.type)) {
       reportHerdr("idle");
@@ -233,6 +272,7 @@ async function main() {
     }
 
     updateStateFromEvent(message);
+    broadcastBridgeEvent(message);
   });
 
   function sendRpcCommand(command, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
@@ -282,8 +322,8 @@ async function main() {
     sessionId: currentSession.sessionId,
     sessionFile: currentSession.sessionFile,
     protocol: "pi-web-rpc-bridge",
-    protocolVersion: 1,
-    capabilities: ["prompt"],
+    protocolVersion: 2,
+    capabilities,
     child: {
       command: childCommand,
       args: childArgs,
@@ -294,47 +334,92 @@ async function main() {
 
   reportHerdr(currentSession.isStreaming || currentSession.isCompacting ? "working" : "idle");
 
-  async function handleBridgeRequest(request) {
+  function validateBridgeRequest(request) {
     const id = typeof request?.id === "string" ? request.id : undefined;
-    if (!request || typeof request !== "object") return createErrorResponse(id, "malformed_request", "Request must be a JSON object", currentSession);
-    if (request.token !== token) return createErrorResponse(id, "invalid_token", "Invalid bridge token", currentSession);
+    if (!request || typeof request !== "object") return { ok: false, response: createErrorResponse(id, "malformed_request", "Request must be a JSON object", currentSession) };
+    if (request.token !== token) return { ok: false, response: createErrorResponse(id, "invalid_token", "Invalid bridge token", currentSession) };
 
     const expectedSessionId = typeof request.expectedSessionId === "string" ? request.expectedSessionId : undefined;
     const expectedSessionFile = normalizeComparablePath(request.expectedSessionFile);
     const currentSessionFile = normalizeComparablePath(currentSession?.sessionFile);
     if (expectedSessionId && expectedSessionId !== currentSession?.sessionId) {
-      return createErrorResponse(id, "session_mismatch", "Bridge session id does not match selected session", currentSession);
+      return { ok: false, response: createErrorResponse(id, "session_mismatch", "Bridge session id does not match selected session", currentSession) };
     }
     if (expectedSessionFile && currentSessionFile && expectedSessionFile !== currentSessionFile) {
-      return createErrorResponse(id, "session_mismatch", "Bridge session file does not match selected session", currentSession);
+      return { ok: false, response: createErrorResponse(id, "session_mismatch", "Bridge session file does not match selected session", currentSession) };
     }
 
     const command = request.command;
-    if (!command || typeof command !== "object") return createErrorResponse(id, "malformed_request", "Missing command object", currentSession);
-    if (command.type !== "prompt") return createErrorResponse(id, "unsupported_command", `Unsupported bridge command: ${String(command.type)}`, currentSession);
-    if (typeof command.message !== "string" || command.message.length === 0) {
-      return createErrorResponse(id, "malformed_request", "Prompt message must be a non-empty string", currentSession);
+    if (!command || typeof command !== "object") return { ok: false, response: createErrorResponse(id, "malformed_request", "Missing command object", currentSession) };
+    return { ok: true, id, command };
+  }
+
+  async function handleBridgeRequest(request) {
+    const validation = validateBridgeRequest(request);
+    if (!validation.ok) return validation.response;
+    const { id, command } = validation;
+
+    if (command.type === "subscribe") {
+      return { id, accepted: true, state: "subscribed", command: "subscribe", sessionId: currentSession.sessionId, sessionFile: currentSession.sessionFile };
     }
 
+    if (!capabilities.includes(command.type)) {
+      return createErrorResponse(id, "unsupported_command", `Unsupported bridge command: ${String(command.type)}`, currentSession);
+    }
+    if (["prompt", "steer", "follow_up"].includes(command.type) && (typeof command.message !== "string" || command.message.length === 0)) {
+      return createErrorResponse(id, "malformed_request", `${command.type} message must be a non-empty string`, currentSession);
+    }
+
+    const rpcPayload = buildRpcPayload(command);
     try {
-      const rpcResponse = await sendRpcCommand({
-        type: "prompt",
-        message: command.message,
-        ...(Array.isArray(command.images) ? { images: command.images } : {}),
-      });
+      const rpcResponse = await sendRpcCommand(rpcPayload);
       if (!rpcResponse.success) {
         return createErrorResponse(id, "pi_rpc_rejected", rpcResponse.error || "Pi RPC rejected command", currentSession);
       }
+      if (rpcPayload.type === "get_state") refreshSessionFromState(rpcResponse.data);
       return {
         id,
         accepted: true,
         state: "accepted",
-        command: "prompt",
+        command: rpcPayload.type,
         sessionId: currentSession.sessionId,
         sessionFile: currentSession.sessionFile,
+        ...(rpcResponse.data !== undefined ? { data: rpcResponse.data } : {}),
       };
     } catch (error) {
       return createErrorResponse(id, childExited ? "child_exited" : "pi_rpc_error", error instanceof Error ? error.message : String(error), currentSession);
+    }
+  }
+
+  function buildRpcPayload(command) {
+    switch (command.type) {
+      case "prompt":
+        return {
+          type: "prompt",
+          message: command.message,
+          ...(Array.isArray(command.images) ? { images: command.images } : {}),
+          ...(typeof command.streamingBehavior === "string" ? { streamingBehavior: command.streamingBehavior } : {}),
+        };
+      case "steer":
+      case "follow_up":
+        return {
+          type: command.type,
+          message: command.message,
+          ...(Array.isArray(command.images) ? { images: command.images } : {}),
+        };
+      case "abort":
+      case "compact":
+      case "get_state":
+      case "get_commands":
+      case "set_model":
+      case "set_thinking_level":
+      case "set_auto_compaction":
+      case "set_auto_retry":
+        return { ...command };
+      case "extension_ui_response":
+        return { ...command };
+      default:
+        return { ...command };
     }
   }
 
@@ -356,7 +441,22 @@ async function main() {
           socket.write(serializeJsonLine(createErrorResponse(undefined, "malformed_json", error.message, currentSession)));
           continue;
         }
-        void handleBridgeRequest(request).then((response) => {
+        const validation = validateBridgeRequest(request);
+        if (validation.ok && validation.command.type === "subscribe") {
+          subscribers.add(socket);
+          socket.write(serializeJsonLine({
+            id: validation.id,
+            accepted: true,
+            state: "subscribed",
+            command: "subscribe",
+            sessionId: currentSession.sessionId,
+            sessionFile: currentSession.sessionFile,
+          }));
+          socket.on("close", () => subscribers.delete(socket));
+          socket.on("error", () => subscribers.delete(socket));
+          continue;
+        }
+        void (validation.ok ? handleBridgeRequest(request) : Promise.resolve(validation.response)).then((response) => {
           socket.write(serializeJsonLine(response));
         });
       }

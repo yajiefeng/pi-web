@@ -3,9 +3,25 @@ import { listAllSessions } from "../session-reader";
 import { getHerdrStatusSnapshot } from "./herdr-adapter";
 import { mergeRuntimeStatuses } from "./merge";
 import { getRpcSessionStatuses } from "./rpc-adapter";
+import type { BridgeRegistryEntry } from "../bridge/rpc-bridge-client";
 import type { RuntimeStatusSnapshot, SessionRuntimeReference } from "./types";
 
 export { mergeRuntimeStatuses, pickRuntimeStatus } from "./merge";
+
+const REQUIRED_BRIDGE_UI_CAPABILITIES = [
+  "prompt",
+  "steer",
+  "follow_up",
+  "abort",
+  "compact",
+  "get_state",
+  "get_commands",
+  "set_model",
+  "set_thinking_level",
+  "set_auto_compaction",
+  "set_auto_retry",
+  "extension_ui_response",
+];
 
 export async function getRuntimeStatusSnapshot(): Promise<RuntimeStatusSnapshot> {
   const rpcSessions = getRpcSessionStatuses();
@@ -31,9 +47,19 @@ async function markBridgeCapableSessions(snapshot: RuntimeStatusSnapshot): Promi
       sessionFile: session.sessionFile,
     });
     if (bridge) {
-      snapshot.sessions[session.sessionId] = { ...session, bridgeCapable: true };
+      snapshot.sessions[session.sessionId] = {
+        ...session,
+        bridgeCapable: supportsBridgeUiParity(bridge),
+        bridgeProtocolVersion: bridge.protocolVersion,
+        bridgeCapabilities: bridge.capabilities,
+      };
     }
   }));
+}
+
+function supportsBridgeUiParity(bridge: BridgeRegistryEntry): boolean {
+  if ((bridge.protocolVersion ?? 0) >= 2) return true;
+  return REQUIRED_BRIDGE_UI_CAPABILITIES.every((capability) => bridge.capabilities.includes(capability));
 }
 
 async function getSessionRefs(): Promise<SessionRuntimeReference[]> {

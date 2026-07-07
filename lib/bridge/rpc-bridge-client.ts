@@ -42,6 +42,7 @@ export interface BridgeCommandResponse {
   command?: string;
   sessionId?: string;
   sessionFile?: string;
+  data?: unknown;
   errorCode?: string;
   errorMessage?: string;
 }
@@ -129,6 +130,94 @@ export function sendBridgeCommand(
       });
     });
     socket.on("error", (error) => settle(() => reject(error)));
+  });
+}
+
+export interface BridgeEventSubscription {
+  close(): void;
+}
+
+export interface BridgeEventHandlers {
+  onEvent(event: unknown): void;
+  onError?(error: Error): void;
+  onClose?(): void;
+}
+
+export async function subscribeBridgeEvents(
+  registry: BridgeRegistryEntry,
+  request: BridgeCommandRequest,
+  handlers: BridgeEventHandlers,
+  options: BridgeCommandOptions = {},
+): Promise<BridgeEventSubscription> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const payload = { ...request, command: { type: "subscribe" }, token: registry.token };
+
+  return new Promise((resolvePromise, reject) => {
+    const socket = net.createConnection(registry.socketPath);
+    let buffer = "";
+    let subscribed = false;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!subscribed) {
+        settle(() => reject(new Error("Timed out waiting for bridge subscription")));
+        socket.destroy();
+      }
+    }, timeoutMs);
+
+    function settle(action: () => void): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      action();
+    }
+
+    function close(): void {
+      socket.end();
+      socket.destroy();
+    }
+
+    socket.setEncoding("utf8");
+    socket.on("connect", () => {
+      socket.write(JSON.stringify(payload) + "\n");
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) break;
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!line.trim()) continue;
+        let message: unknown;
+        try {
+          message = JSON.parse(line);
+        } catch (error) {
+          const parsedError = error instanceof Error ? error : new Error(String(error));
+          if (!subscribed) settle(() => reject(parsedError));
+          else handlers.onError?.(parsedError);
+          continue;
+        }
+
+        if (!subscribed) {
+          const response = message as BridgeCommandResponse;
+          if (!response.accepted) {
+            settle(() => reject(new Error(response.errorMessage ?? "Bridge rejected event subscription")));
+            close();
+            return;
+          }
+          subscribed = true;
+          settle(() => resolvePromise({ close }));
+          continue;
+        }
+
+        handlers.onEvent(message);
+      }
+    });
+    socket.on("error", (error) => {
+      if (!subscribed) settle(() => reject(error));
+      else handlers.onError?.(error);
+    });
+    socket.on("close", () => handlers.onClose?.());
   });
 }
 

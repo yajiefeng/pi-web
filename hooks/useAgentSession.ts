@@ -616,6 +616,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return request;
         });
         break;
+      default: {
+        const unsupported = request as { id?: string; method?: string };
+        addNotice({
+          id: unsupported.id,
+          type: "error",
+          message: `Unsupported extension UI request${unsupported.method ? `: ${unsupported.method}` : ""}`,
+        });
+        if (unsupported.id && sessionIdRef.current) {
+          void sendAgentCommand(sessionIdRef.current, {
+            type: "extension_ui_response",
+            id: unsupported.id,
+            cancelled: true,
+          }).catch((error) => {
+            console.error("Failed to cancel unsupported extension UI request:", error);
+          });
+        }
+        break;
+      }
     }
   }, [addNotice, opts.chatInputRef]);
 

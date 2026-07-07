@@ -100,7 +100,7 @@ Bridge command requests should include:
 
 Bridge responses should be structured enough for pi-web to distinguish accepted, rejected, session mismatch, unsupported command, child exited, and Pi RPC error states.
 
-The first writable slice is `prompt`. Later slices add Steer, Follow-up, Abort, Compact, model/thinking/tools controls, and extension UI forwarding.
+Bridge protocol version 2 is the first full UI-parity slice. It advertises capabilities for `prompt`, `steer`, `follow_up`, `abort`, `compact`, `get_state`, `get_commands`, model/thinking/auto-retry controls, and `extension_ui_response`. Pi-web treats older or partial bridge registries as not fully writable unless the required capability set is explicitly present.
 
 ## Forbidden paths
 
@@ -147,14 +147,14 @@ Preferred regression seams:
 - Source-level architecture checks for forbidden terminal fallback terms.
 - Bridge command-runner tests with fake Pi RPC child stdio.
 - Herdr creation command construction tests.
-- Runtime-status tests for bridge capability and exact binding.
-- Route tests for prompt success, no bridge, stale bridge, and session mismatch.
+- Runtime-status tests for bridge capability metadata and exact binding.
+- Route tests for prompt/streaming/config/extension commands, no bridge, stale bridge, and session mismatch.
 - UI checks for pi-web-managed, Herdr TUI-owned read-only, and Herdr bridge-owned writable states.
 
 ## Success criteria
 
 - New Herdr sessions start bridge-owned runtime rather than plain Pi TUI.
-- Bridge-owned sessions can accept pi-web prompt commands through Pi RPC.
+- Bridge-owned sessions can accept pi-web prompt, streaming control, compaction, slash-command, config, and extension UI response commands through Pi RPC.
 - Herdr TUI-owned sessions remain read-only unless explicitly migrated.
 - Explicit web fallback remains fully functional.
 - No command routing uses terminal keystrokes.
