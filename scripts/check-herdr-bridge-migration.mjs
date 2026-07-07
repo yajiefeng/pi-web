@@ -40,6 +40,7 @@ assert.match(migration, /getRuntimeStatusSnapshot/, "Migration should verify cur
 assert.match(migration, /status\.herdrAgentId !== oldAgentId/, "Migration should reject mismatched selected session/Herdr binding");
 assert.match(migration, /closeHerdrAgentPane/, "Migration should close the old pane only after confirmation");
 assert.match(migration, /waitForHerdrAgentRelease/, "Migration should verify the old writer is released before starting bridge");
+assert.match(migration, /snapshot\.health\.herdr !== "ok"/, "Migration must not assume release when Herdr status is unavailable");
 assert.match(migration, /sessionFile: resolvedSessionFile/, "Migration should start the bridge for the same exact session file");
 assert.match(control, /"--session", input\.sessionFile/, "Bridge startup should pass the selected session file to Pi RPC");
 assert.doesNotMatch(`${appShell}\n${chatWindow}\n${migrateRoute}\n${migration}`, /agent send|pane send-text|pane send-keys|pane send-input|pane run/i,
@@ -80,6 +81,11 @@ const releasedSnapshot = {
   sessions: {},
   herdrAgents: [],
   health: { rpc: "ok", herdr: "ok" },
+};
+const unhealthyEmptySnapshot = {
+  sessions: {},
+  herdrAgents: [],
+  health: { rpc: "ok", herdr: "error" },
 };
 
 try {
@@ -132,6 +138,32 @@ try {
     assert.equal(body.errorCode, "old_agent_still_active");
     assert.equal(closed, true, "explicit confirmation should allow stopping the old TUI runtime");
     assert.equal(started, false, "bridge must not start while the old writer still appears active");
+  }
+
+  {
+    let started = false;
+    let releaseChecks = 0;
+    const response = await migrateHerdrTuiSessionToBridgeResponse(jsonRequest({
+      sessionId: "session-1",
+      sessionFile,
+      oldAgentId: "old-agent",
+      confirmStopOldAgent: true,
+    }), {
+      resolveSession: async () => sessionFile,
+      getSnapshot: async () => releaseChecks++ === 0 ? activeSnapshot : unhealthyEmptySnapshot,
+      closeOldAgent: async () => {},
+      readSessionCwd: () => projectDir,
+      waitTimeoutMs: 1,
+      waitIntervalMs: 0,
+      start: async () => {
+        started = true;
+        throw new Error("must not start when Herdr release cannot be confirmed");
+      },
+    });
+    const body = await response.json();
+    assert.equal(response.status, 409);
+    assert.equal(body.errorCode, "old_agent_still_active");
+    assert.equal(started, false, "bridge must not start when Herdr status cannot confirm release");
   }
 
   {

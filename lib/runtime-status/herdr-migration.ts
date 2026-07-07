@@ -120,6 +120,16 @@ export async function migrateHerdrTuiSessionToBridgeResponse(
     }, { status: 409 });
   }
 
+  const cwd = readCwdForSession(resolvedSessionFile, options.readSessionCwd);
+  if (!cwd) {
+    return Response.json({ ok: false, error: "Selected session does not include a cwd", errorCode: "missing_cwd" }, { status: 400 });
+  }
+  const validation = validateCwdDirectory(cwd);
+  if (!validation.ok) {
+    return Response.json({ ok: false, error: validation.error, errorCode: "invalid_cwd" }, { status: 400 });
+  }
+  options.allowRoot?.(validation.cwd);
+
   const closeOldAgent = options.closeOldAgent ?? closeHerdrAgentPane;
   try {
     await closeOldAgent(oldAgent);
@@ -142,16 +152,6 @@ export async function migrateHerdrTuiSessionToBridgeResponse(
       errorCode: "old_agent_still_active",
     }, { status: 409 });
   }
-
-  const cwd = readCwdForSession(resolvedSessionFile, options.readSessionCwd);
-  if (!cwd) {
-    return Response.json({ ok: false, error: "Selected session does not include a cwd", errorCode: "missing_cwd" }, { status: 400 });
-  }
-  const validation = validateCwdDirectory(cwd);
-  if (!validation.ok) {
-    return Response.json({ ok: false, error: validation.error, errorCode: "invalid_cwd" }, { status: 400 });
-  }
-  options.allowRoot?.(validation.cwd);
 
   try {
     const start = options.start ?? ((input: StartHerdrAgentInput) => startHerdrAgent(input));
@@ -187,6 +187,10 @@ export async function waitForHerdrAgentRelease(input: {
 
   while (Date.now() <= deadline) {
     const snapshot = await getSnapshot();
+    if (snapshot.health.herdr !== "ok") {
+      await sleep(intervalMs);
+      continue;
+    }
     const oldAgentStillListed = snapshot.herdrAgents.some((agent) => agent.id === input.oldAgentId);
     const oldSessionBindingStillActive = Object.values(snapshot.sessions).some((status) => {
       if (status.herdrAgentId !== input.oldAgentId) return false;
