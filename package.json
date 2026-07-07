@@ -42,6 +42,7 @@
     "test:herdr-web-fallback": "node scripts/check-herdr-web-fallback.mjs",
     "test:herdr-mobile-acceptance": "node scripts/check-herdr-mobile-acceptance.mjs",
     "test:herdr-rpc-bridge-architecture": "node scripts/check-herdr-rpc-bridge-architecture.mjs",
+    "test:long-session-rendering": "node scripts/check-long-session-rendering.mjs",
     "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "test:pi-web-rpc-bridge": "node scripts/check-pi-web-rpc-bridge.mjs",
     "test:runtime-status": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-runtime-status.mjs",

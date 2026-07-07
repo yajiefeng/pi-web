@@ -84,6 +84,7 @@ const TYPEWRITER_PHRASES = [
 const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
 const CHAT_INPUT_RIGHT_PADDING = CHAT_COLUMN_PADDING + CHAT_MINIMAP_WIDTH;
+const INITIAL_RENDER_MESSAGE_LIMIT = 300;
 
 function Typewriter({ phrases }: { phrases: string[] }) {
   const [phraseIdx, setPhraseIdx] = useState(() => Math.floor(Math.random() * phrases.length));
@@ -446,8 +447,17 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
   }, [chatInputRef]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
+  const [showAllMessages, setShowAllMessages] = useState(false);
+  useEffect(() => {
+    setShowAllMessages(false);
+  }, [session?.id]);
 
-  const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  const renderStartIndex = showAllMessages || messages.length <= INITIAL_RENDER_MESSAGE_LIMIT
+    ? 0
+    : messages.length - INITIAL_RENDER_MESSAGE_LIMIT;
+  const renderedMessages = renderStartIndex === 0 ? messages : messages.slice(renderStartIndex);
+  const hiddenMessageCount = renderStartIndex;
+  const visibleMessages = renderedMessages.filter((m) => m.role === "user" || m.role === "assistant");
   const messageRefs = useMessageRefs(visibleMessages.length);
 
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
@@ -658,7 +668,30 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
                 if (messages[i].role === "user") { lastUserIdx = i; break; }
               }
               let refIdx = 0;
-              return messages.map((msg, idx) => {
+              return (
+                <>
+                  {hiddenMessageCount > 0 && (
+                    <div style={{ display: "flex", justifyContent: "center", padding: "8px 0 14px" }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowAllMessages(true)}
+                        style={{
+                          border: "1px solid var(--border)",
+                          background: "var(--bg-hover)",
+                          color: "var(--text-muted)",
+                          borderRadius: 999,
+                          padding: "7px 12px",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Showing latest {renderedMessages.length.toLocaleString()} of {messages.length.toLocaleString()} messages · Load all messages
+                      </button>
+                    </div>
+                  )}
+                  {renderedMessages.map((msg, localIdx) => {
+                    const idx = renderStartIndex + localIdx;
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
                     ? entryIds[idx - 1]
@@ -703,7 +736,9 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
                     {view}
                   </div>
                 );
-              });
+                  })}
+                </>
+              );
             })()}
 
             {streamState.isStreaming && streamState.streamingMessage && (
@@ -726,7 +761,7 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
         </div>
         {isMobile ? null : (
           <ChatMinimap
-            messages={messages}
+            messages={renderedMessages}
             streamingMessage={streamState.streamingMessage}
             scrollContainer={scrollContainerRef}
             messageRefs={messageRefs}
