@@ -56,10 +56,11 @@ try {
       },
     });
 
-    assert.deepEqual(calls, [{
-      args: ["agent", "start", "pi-web-pi-web-herdr-create-test-a1b2", "--cwd", projectDir, "--", "pi"],
-      timeoutMs: 5000,
-    }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].timeoutMs, 5000);
+    assert.deepEqual(calls[0].args.slice(0, 6), ["agent", "start", "pi-web-pi-web-herdr-create-test-a1b2", "--cwd", projectDir, "--"]);
+    assert.match(calls[0].args.join(" "), /pi-web-rpc-bridge/, "Herdr creation should start the Pi RPC bridge");
+    assert.deepEqual(calls[0].args.slice(-4), ["--", "pi", "--mode", "rpc"], "Bridge should launch Pi in RPC mode");
     assert.deepEqual(result, {
       ok: true,
       agentId: "term-new",

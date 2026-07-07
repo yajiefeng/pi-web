@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { basename } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, join } from "node:path";
+import { execPath } from "node:process";
 import { promisify } from "node:util";
 import { parseHerdrAgentList, type HerdrCommandRunner } from "./herdr-adapter.ts";
 
@@ -13,6 +15,7 @@ type RandomString = () => string;
 export interface StartHerdrAgentInput {
   cwd: string;
   random?: RandomString;
+  bridgeCommand?: string[];
 }
 
 export interface HerdrAgentCreationResult {
@@ -40,6 +43,16 @@ export function generatePiWebHerdrAgentName(cwd: string, options: { random?: Ran
   return `pi-web-${projectName}-${suffix}`;
 }
 
+export function resolvePiWebRpcBridgeCommand(): string[] {
+  const configured = process.env.PI_WEB_RPC_BRIDGE_BIN?.trim();
+  if (configured) return [configured];
+
+  const localBridge = join(process.cwd(), "bin", "pi-web-rpc-bridge.js");
+  if (existsSync(localBridge)) return [execPath, localBridge];
+
+  return ["pi-web-rpc-bridge"];
+}
+
 export async function startHerdrAgent(
   input: StartHerdrAgentInput,
   options: { run?: HerdrCommandRunner; timeoutMs?: number } = {},
@@ -47,7 +60,8 @@ export async function startHerdrAgent(
   const run = options.run ?? runHerdr;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const agentLabel = generatePiWebHerdrAgentName(input.cwd, { random: input.random });
-  const args = ["agent", "start", agentLabel, "--cwd", input.cwd, "--", "pi"];
+  const bridgeCommand = input.bridgeCommand ?? resolvePiWebRpcBridgeCommand();
+  const args = ["agent", "start", agentLabel, "--cwd", input.cwd, "--", ...bridgeCommand, "--", "pi", "--mode", "rpc"];
 
   let startOutput: { stdout: string; stderr: string };
   try {
