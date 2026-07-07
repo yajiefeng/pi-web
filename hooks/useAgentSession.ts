@@ -24,6 +24,8 @@ export interface SessionData {
     entryIds: string[];
     thinkingLevel: string;
     model: { provider: string; modelId: string } | null;
+    totalMessages?: number;
+    truncated?: boolean;
   };
 }
 
@@ -76,6 +78,8 @@ type AgentStateResponse = {
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
 };
+
+const INITIAL_SESSION_MESSAGE_LIMIT = 300;
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
@@ -346,12 +350,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   })();
 
-  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
+  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, messageLimit: number | null = INITIAL_SESSION_MESSAGE_LIMIT) => {
     try {
       if (showLoading) setLoading(true);
-      const url = includeState
-        ? `/api/sessions/${encodeURIComponent(sid)}?includeState`
-        : `/api/sessions/${encodeURIComponent(sid)}`;
+      const params = new URLSearchParams();
+      if (includeState) params.set("includeState", "1");
+      if (messageLimit) params.set("messageLimit", String(messageLimit));
+      const query = params.toString();
+      const url = `/api/sessions/${encodeURIComponent(sid)}${query ? `?${query}` : ""}`;
       const res = await fetch(url);
       if (res.status === 404) {
         if (showLoading) {
@@ -384,6 +390,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (showLoading) setLoading(false);
     }
   }, []);
+
+  const loadAllMessages = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return null;
+    return loadSession(sid, true, false, null);
+  }, [loadSession]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -1326,7 +1338,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
+    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, loadAllMessages, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,

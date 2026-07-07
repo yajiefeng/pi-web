@@ -9,6 +9,7 @@ import {
   buildSessionContext,
   listAllSessions,
 } from "@/lib/session-reader";
+import type { SessionContext } from "@/lib/types";
 import { getRpcSession } from "@/lib/rpc-manager";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
@@ -18,6 +19,27 @@ function createdFromSessionFile(sessionFile: string): string | undefined {
   const filename = sessionFile.split(/[\\/]/).pop() ?? "";
   const raw = filename.match(/^(.*?)_[^_\\/]+\.jsonl$/)?.[1];
   return raw ? raw.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z") : undefined;
+}
+
+function readMessageLimit(req: Request): number | null {
+  const value = new URL(req.url).searchParams.get("messageLimit");
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function limitSessionContext(context: SessionContext, messageLimit: number | null): SessionContext {
+  const totalMessages = context.messages.length;
+  if (!messageLimit || totalMessages <= messageLimit) {
+    return { ...context, totalMessages, truncated: false };
+  }
+  return {
+    ...context,
+    messages: context.messages.slice(-messageLimit),
+    entryIds: context.entryIds.slice(-messageLimit),
+    totalMessages,
+    truncated: true,
+  };
 }
 
 /**
@@ -160,7 +182,7 @@ export async function GET(
     const entries = sm.getEntries() as never;
     const leafId = sm.getLeafId();
     const tree = projectTreeForResponse(sm.getTree());
-    const context = buildSessionContext(entries, leafId);
+    const context = limitSessionContext(buildSessionContext(entries, leafId), readMessageLimit(req));
 
     const header = sm.getHeader();
     let modified = header?.timestamp ?? new Date().toISOString();

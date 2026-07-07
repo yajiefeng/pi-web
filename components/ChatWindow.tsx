@@ -84,7 +84,6 @@ const TYPEWRITER_PHRASES = [
 const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
 const CHAT_INPUT_RIGHT_PADDING = CHAT_COLUMN_PADDING + CHAT_MINIMAP_WIDTH;
-const INITIAL_RENDER_MESSAGE_LIMIT = 300;
 
 function Typewriter({ phrases }: { phrases: string[] }) {
   const [phraseIdx, setPhraseIdx] = useState(() => Math.floor(Math.random() * phrases.length));
@@ -366,7 +365,7 @@ function PendingHerdrSessionView({
 
 export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOnlyHerdrSession, onFocusReadOnlyHerdrAgent, onMigrateReadOnlyHerdrSession, onFocusPendingHerdrAgent, onTryHerdrAgain, onCreateWebSessionInstead, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange }: Props) {
   const {
-    loading, error, messages, entryIds, streamState,
+    data, loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
@@ -380,7 +379,7 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, handleAgentEventRef,
+    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, loadAllMessages, handleAgentEventRef,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
@@ -452,11 +451,9 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
     setShowAllMessages(false);
   }, [session?.id]);
 
-  const renderStartIndex = showAllMessages || messages.length <= INITIAL_RENDER_MESSAGE_LIMIT
-    ? 0
-    : messages.length - INITIAL_RENDER_MESSAGE_LIMIT;
-  const renderedMessages = renderStartIndex === 0 ? messages : messages.slice(renderStartIndex);
-  const hiddenMessageCount = renderStartIndex;
+  const totalMessageCount = data?.context.totalMessages ?? messages.length;
+  const hiddenMessageCount = showAllMessages ? 0 : Math.max(0, totalMessageCount - messages.length);
+  const renderedMessages = messages;
   const visibleMessages = renderedMessages.filter((m) => m.role === "user" || m.role === "assistant");
   const messageRefs = useMessageRefs(visibleMessages.length);
 
@@ -674,7 +671,10 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
                     <div style={{ display: "flex", justifyContent: "center", padding: "8px 0 14px" }}>
                       <button
                         type="button"
-                        onClick={() => setShowAllMessages(true)}
+                        onClick={() => {
+                          setShowAllMessages(true);
+                          void loadAllMessages();
+                        }}
                         style={{
                           border: "1px solid var(--border)",
                           background: "var(--bg-hover)",
@@ -686,12 +686,11 @@ export function ChatWindow({ session, newSessionCwd, pendingHerdrSession, readOn
                           cursor: "pointer",
                         }}
                       >
-                        Showing latest {renderedMessages.length.toLocaleString()} of {messages.length.toLocaleString()} messages · Load all messages
+                        Showing latest {renderedMessages.length.toLocaleString()} of {totalMessageCount.toLocaleString()} messages · Load all messages
                       </button>
                     </div>
                   )}
-                  {renderedMessages.map((msg, localIdx) => {
-                    const idx = renderStartIndex + localIdx;
+                  {renderedMessages.map((msg, idx) => {
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
                     ? entryIds[idx - 1]

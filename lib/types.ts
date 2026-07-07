@@ -285,6 +285,8 @@ export interface SessionContext {
   entryIds: string[]; // parallel to messages — the session entry id for each message
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
+  totalMessages?: number;
+  truncated?: boolean;
 }
 
 // RPC types
