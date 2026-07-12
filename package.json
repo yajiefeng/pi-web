@@ -46,6 +46,7 @@
     "test:mobile-input-font-size": "node scripts/check-mobile-input-font-size.mjs",
     "test:pi-web-rpc-bridge": "node scripts/check-pi-web-rpc-bridge.mjs",
     "test:runtime-status": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-runtime-status.mjs",
+    "test:session-model-options": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-session-model-options.mjs",
     "test:transcribe-api": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-transcribe-api.mjs",
     "test:voice-input-helpers": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-voice-input-helpers.mjs",
     "test:voice-input-recorder": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-voice-input-recorder.mjs",

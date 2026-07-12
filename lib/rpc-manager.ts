@@ -297,6 +297,9 @@ export class AgentSessionWrapper {
         };
       }
 
+      case "get_available_models":
+        return { models: this.inner.modelRegistry.getAvailable() };
+
       case "set_model": {
         const { provider, modelId } = command as { provider: string; modelId: string };
         const registry = this.inner.modelRegistry;

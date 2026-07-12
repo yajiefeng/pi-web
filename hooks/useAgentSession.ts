@@ -978,7 +978,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       try {
         await sendAgentCommand(sid, { type: "set_model", provider, modelId });
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
         console.error("Failed to set model:", e);
+        addNotice({ type: "error", message: `Failed to switch model: ${message}` });
       }
       return;
     }
@@ -988,9 +990,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
       setCurrentModelOverride({ provider, modelId });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
       console.error("Failed to set model:", e);
+      addNotice({ type: "error", message: `Failed to switch model: ${message}` });
     }
-  }, [isNew, setNewSessionModel]);
+  }, [addNotice, isNew, setNewSessionModel]);
 
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1286,8 +1290,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Load model list
   useEffect(() => {
     const modelCwd = newSessionCwd ?? session?.cwd ?? "";
-    const modelsUrl = modelCwd ? `/api/models?cwd=${encodeURIComponent(modelCwd)}` : "/api/models";
+    const params = new URLSearchParams();
+    if (modelCwd) params.set("cwd", modelCwd);
+    if (!isNew && session?.id) params.set("sessionId", session.id);
+    const modelsQuery = params.toString();
+    const modelsUrl = `/api/models${modelsQuery ? `?${modelsQuery}` : ""}`;
     const controller = new AbortController();
+    setModelNames({});
+    setModelList([]);
+    setModelThinkingLevels({});
+    setModelThinkingLevelMaps({});
     fetch(modelsUrl, { signal: controller.signal }).then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
@@ -1306,9 +1318,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     }).catch((e) => {
       if (e instanceof DOMException && e.name === "AbortError") return;
+      const message = e instanceof Error ? e.message : String(e);
+      addNotice({ type: "error", message: `Failed to load session models: ${message}` });
     });
     return () => controller.abort();
-  }, [isNew, modelsRefreshKey, newSessionCwd, session?.cwd]);
+  }, [addNotice, isNew, modelsRefreshKey, newSessionCwd, session?.cwd, session?.id]);
 
   // Compact error auto-dismiss
   useEffect(() => {
