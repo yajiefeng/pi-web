@@ -9,6 +9,7 @@ const sessionSidebar = readFileSync("components/SessionSidebar.tsx", "utf8");
 const agentHook = readFileSync("hooks/useAgentSession.ts", "utf8");
 const bridgeRouting = readFileSync("app/api/agent/[id]/route.ts", "utf8");
 const bridgeEvents = readFileSync("app/api/agent/[id]/events/route.ts", "utf8");
+const recoveryRoute = readFileSync("app/api/runtime/herdr/recovery/route.ts", "utf8");
 
 assert.match(types, /bridgeCapable\?: boolean/, "Runtime status should expose bridge capability per session");
 assert.match(types, /bridgeProtocolVersion\?: number/, "Runtime status should expose bridge protocol version per session");
@@ -38,5 +39,10 @@ assert.match(sessionSidebar, /source\.onerror = \(\) => \{[\s\S]*refreshRuntimeS
   "Sidebar runtime SSE errors should poll snapshots until live events recover");
 assert.match(sessionSidebar, /generation !== updateGeneration[\s\S]*generation === updateGeneration/,
   "An older recovery request must not overwrite a newer SSE snapshot");
+assert.match(sessionSidebar, /"Focus"/, "Runtime diagnostics should offer an explicit focus action");
+assert.match(sessionSidebar, /"Retry binding"/, "Stale runtime diagnostics should offer binding recovery");
+assert.match(sessionSidebar, /"Clean up"/, "Runtime diagnostics should offer explicit cleanup");
+assert.match(sessionSidebar, /fetch\("\/api\/runtime\/herdr\/recovery"/, "Recovery actions should use the guarded server endpoint");
+assert.match(recoveryRoute, /recoverHerdrRuntime/, "The recovery endpoint should enforce runtime recovery invariants");
 
 console.log("Herdr bridge UI checks passed");

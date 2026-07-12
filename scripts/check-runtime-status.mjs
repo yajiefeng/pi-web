@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { buildSidebarProjection, getRuntimeDiagnosticLabel, getSessionActivityLabel } from "../lib/sidebar-projection.ts";
+import { recoverHerdrRuntime } from "../lib/runtime-status/herdr-recovery.ts";
 import { stopHerdrRuntimeForSession } from "../lib/runtime-status/session-lifecycle.ts";
 import { mergeRuntimeStatuses } from "../lib/runtime-status/merge.ts";
 import { focusHerdrAgent, getHerdrStatusSnapshot, parseHerdrAgentList } from "../lib/runtime-status/herdr-adapter.ts";
@@ -110,6 +111,51 @@ function herdr(overrides = {}) {
     },
   );
   assert.equal(absent, false);
+}
+
+{
+  const actions = [];
+  const baseDeps = {
+    getSnapshot: async () => ({ health: "ok", agents: [herdr({ id: "diagnostic", cwd: "/repo", linked: false, sessionId: undefined, sessionPath: undefined })] }),
+    sessionRefs: [],
+    close: async (agent) => { actions.push(["close", agent.id]); },
+    start: async (input) => {
+      actions.push(["start", input]);
+      return { ok: true, agentId: "replacement", agentLabel: "replacement", pending: true, cwd: input.cwd };
+    },
+    resolveValidSessionFile: () => undefined,
+  };
+
+  const cleaned = await recoverHerdrRuntime({ agentId: "diagnostic", action: "cleanup" }, baseDeps);
+  assert.equal(cleaned.action, "cleanup");
+  assert.deepEqual(actions, [["close", "diagnostic"]]);
+
+  actions.length = 0;
+  const retried = await recoverHerdrRuntime(
+    { agentId: "diagnostic", action: "retry_binding" },
+    {
+      ...baseDeps,
+      getSnapshot: async () => ({ health: "ok", agents: [herdr({ id: "diagnostic", cwd: "/repo", sessionId: "missing", sessionPath: "/tmp/existing.jsonl" })] }),
+      resolveValidSessionFile: (path) => path === "/tmp/existing.jsonl" ? path : undefined,
+    },
+  );
+  assert.equal(retried.action, "retry_binding");
+  assert.deepEqual(actions, [
+    ["close", "diagnostic"],
+    ["start", { cwd: "/repo", sessionFile: "/tmp/existing.jsonl" }],
+  ]);
+
+  await assert.rejects(
+    recoverHerdrRuntime(
+      { agentId: "diagnostic", action: "cleanup" },
+      {
+        ...baseDeps,
+        sessionRefs: [{ sessionId: "session-1", sessionFile: "/tmp/session-1.jsonl" }],
+        getSnapshot: async () => ({ health: "ok", agents: [herdr({ id: "diagnostic" })] }),
+      },
+    ),
+    /resolved runtime.*diagnostics/i,
+  );
 }
 
 function sidebarSession(id, overrides = {}) {

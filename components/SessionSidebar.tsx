@@ -866,6 +866,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         agents={sidebarProjection.runtimeDiagnostics}
         onToggle={() => setHerdrPanelOpen((v) => !v)}
         onFocusAgent={handleHerdrAgentFocus}
+        onRefresh={loadSessions}
       />
 
       {/* File Explorer section */}
@@ -995,14 +996,17 @@ function RuntimeDiagnosticsPanel({
   agents,
   onToggle,
   onFocusAgent,
+  onRefresh,
 }: {
   open: boolean;
   health: HerdrHealth;
   agents: HerdrAgentRuntimeStatus[];
   onToggle: () => void;
   onFocusAgent: (agent: HerdrAgentRuntimeStatus) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
   const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
+  const [pendingRecovery, setPendingRecovery] = useState<{ agentId: string; action: "retry_binding" | "cleanup" } | null>(null);
   const [focusError, setFocusError] = useState<{ agentId: string; message: string } | null>(null);
   const healthLabel = health === "ok"
     ? agents.length === 0 ? "clear" : `${agents.length} runtime${agents.length === 1 ? "" : "s"}`
@@ -1010,7 +1014,7 @@ function RuntimeDiagnosticsPanel({
   const healthColor = health === "ok" ? "var(--text-muted)" : health === "unavailable" ? "var(--text-dim)" : "#ef4444";
 
   const handleFocusAgent = useCallback(async (agent: HerdrAgentRuntimeStatus) => {
-    if (pendingAgentId) return;
+    if (pendingAgentId || pendingRecovery) return;
     setPendingAgentId(agent.id);
     setFocusError(null);
     try {
@@ -1020,7 +1024,28 @@ function RuntimeDiagnosticsPanel({
     } finally {
       setPendingAgentId(null);
     }
-  }, [onFocusAgent, pendingAgentId]);
+  }, [onFocusAgent, pendingAgentId, pendingRecovery]);
+
+  const handleRecovery = useCallback(async (agent: HerdrAgentRuntimeStatus, action: "retry_binding" | "cleanup") => {
+    if (pendingAgentId || pendingRecovery) return;
+    if (action === "cleanup" && !window.confirm(`Close and remove runtime ${agent.label}?`)) return;
+    setPendingRecovery({ agentId: agent.id, action });
+    setFocusError(null);
+    try {
+      const response = await fetch("/api/runtime/herdr/recovery", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: agent.id, action }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? `Recovery failed with HTTP ${response.status}`);
+      await onRefresh();
+    } catch (error) {
+      setFocusError({ agentId: agent.id, message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setPendingRecovery(null);
+    }
+  }, [onRefresh, pendingAgentId, pendingRecovery]);
 
   return (
     <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
@@ -1069,8 +1094,11 @@ function RuntimeDiagnosticsPanel({
                 key={agent.id}
                 agent={agent}
                 pending={pendingAgentId === agent.id}
+                pendingAction={pendingRecovery?.agentId === agent.id ? pendingRecovery.action : undefined}
                 error={focusError?.agentId === agent.id ? focusError.message : undefined}
                 onFocus={() => void handleFocusAgent(agent)}
+                onRetry={() => void handleRecovery(agent, "retry_binding")}
+                onCleanup={() => void handleRecovery(agent, "cleanup")}
               />
             ))
           )}
@@ -1083,15 +1111,22 @@ function RuntimeDiagnosticsPanel({
 function HerdrAgentRow({
   agent,
   pending,
+  pendingAction,
   error,
   onFocus,
+  onRetry,
+  onCleanup,
 }: {
   agent: HerdrAgentRuntimeStatus;
   pending: boolean;
+  pendingAction?: "retry_binding" | "cleanup";
   error?: string;
   onFocus: () => void;
+  onRetry: () => void;
+  onCleanup: () => void;
 }) {
   const diagnosticLabel = getRuntimeDiagnosticLabel(agent);
+  const busy = pending || Boolean(pendingAction);
   const color = agent.linked
     ? "#d97706"
     : agent.status === "working"
@@ -1102,41 +1137,61 @@ function HerdrAgentRow({
           ? "#10b981"
           : "var(--text-dim)";
   const statusLabel = agent.linked ? "stale" : agent.status;
+  const actionButtonStyle = {
+    padding: "2px 6px",
+    border: "1px solid var(--border)",
+    borderRadius: 5,
+    background: "var(--bg-hover)",
+    color: "var(--text-muted)",
+    fontSize: 10,
+    cursor: busy ? "wait" : "pointer",
+  } as const;
 
   return (
-    <button
-      type="button"
-      onClick={onFocus}
-      disabled={pending}
-      title={["Focus Herdr agent", agent.label, agent.status, agent.cwd, agent.sessionId, agent.sessionPath, agent.message].filter(Boolean).join(" · ")}
-      style={{
-        display: "grid",
-        gridTemplateColumns: "10px minmax(0, 1fr) auto",
-        alignItems: "center",
-        gap: 7,
-        minWidth: 0,
-        width: "100%",
-        padding: "5px 7px",
-        border: "1px solid var(--border)",
-        borderRadius: 7,
-        background: "var(--bg)",
-        cursor: pending ? "wait" : "pointer",
-        textAlign: "left",
-        font: "inherit",
-        opacity: pending ? 0.7 : 1,
-      }}
-    >
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontSize: 12 }}>
-        {agent.label}
-      </span>
-      <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-        {pending ? "focus…" : statusLabel}
-      </span>
-      <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: error ? "#ef4444" : "var(--text-dim)", fontSize: 11 }}>
-        {error ?? `${diagnosticLabel}${agent.cwd ? ` · ${agent.cwd}` : ""}`}
-      </span>
-    </button>
+    <div style={{ border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", opacity: busy ? 0.7 : 1 }}>
+      <button
+        type="button"
+        onClick={onFocus}
+        disabled={busy}
+        title={["Focus Herdr agent", agent.label, agent.status, agent.cwd, agent.sessionId, agent.sessionPath, agent.message].filter(Boolean).join(" · ")}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "10px minmax(0, 1fr) auto",
+          alignItems: "center",
+          gap: 7,
+          minWidth: 0,
+          width: "100%",
+          padding: "5px 7px 3px",
+          border: "none",
+          background: "transparent",
+          cursor: busy ? "wait" : "pointer",
+          textAlign: "left",
+          font: "inherit",
+        }}
+      >
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontSize: 12 }}>
+          {agent.label}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+          {pending ? "focus…" : statusLabel}
+        </span>
+        <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: error ? "#ef4444" : "var(--text-dim)", fontSize: 11 }}>
+          {error ?? `${diagnosticLabel}${agent.cwd ? ` · ${agent.cwd}` : ""}`}
+        </span>
+      </button>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 5, padding: "2px 6px 5px" }}>
+        <button type="button" onClick={onFocus} disabled={busy} style={actionButtonStyle} title="Focus this runtime in Herdr">
+          {pending ? "Focusing…" : "Focus"}
+        </button>
+        <button type="button" onClick={onRetry} disabled={busy || !agent.cwd} style={actionButtonStyle} title="Restart this runtime and retry Session Binding">
+          {pendingAction === "retry_binding" ? "Retrying…" : "Retry binding"}
+        </button>
+        <button type="button" onClick={onCleanup} disabled={busy} style={{ ...actionButtonStyle, color: "#ef4444" }} title="Close this unresolved runtime">
+          {pendingAction === "cleanup" ? "Cleaning…" : "Clean up"}
+        </button>
+      </div>
+    </div>
   );
 }
 
