@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { HerdrAgentRuntimeStatus, HerdrHealth, SessionRuntimeStatus, RuntimeStatusSnapshot } from "@/lib/runtime-status/types";
+import { buildSidebarProjection, getSessionActivityLabel, type SidebarSessionTreeNode } from "@/lib/sidebar-projection";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer } from "./FileExplorer";
 
@@ -102,55 +103,6 @@ function shortenCwd(cwd: string, homeDir?: string): string {
 }
 
 
-
-interface SessionTreeNode {
-  session: SessionInfo;
-  children: SessionTreeNode[];
-}
-
-function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
-  const byId = new Map<string, SessionTreeNode>();
-  for (const s of sessions) {
-    byId.set(s.id, { session: s, children: [] });
-  }
-
-  // Build a map of parentSessionId chains so we can resolve missing ancestors
-  const parentOf = new Map<string, string>();
-  for (const s of sessions) {
-    if (s.parentSessionId) parentOf.set(s.id, s.parentSessionId);
-  }
-
-  // Walk up the parentSessionId chain to find the nearest ancestor that exists in byId
-  function resolveAncestor(id: string): string | null {
-    let cur = parentOf.get(id);
-    const visited = new Set<string>();
-    while (cur) {
-      if (visited.has(cur)) return null; // cycle guard
-      visited.add(cur);
-      if (byId.has(cur)) return cur;
-      cur = parentOf.get(cur);
-    }
-    return null;
-  }
-
-  const roots: SessionTreeNode[] = [];
-  for (const node of byId.values()) {
-    const ancestor = resolveAncestor(node.session.id);
-    if (ancestor) {
-      byId.get(ancestor)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  }
-
-  // Sort each level by modified desc
-  const sort = (nodes: SessionTreeNode[]) => {
-    nodes.sort((a, b) => b.session.modified.localeCompare(a.session.modified));
-    nodes.forEach((n) => sort(n.children));
-  };
-  sort(roots);
-  return roots;
-}
 
 const SCRAMBLE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
 
@@ -504,8 +456,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ? allSessions.filter((s) => s.cwd === selectedCwd)
     : allSessions;
 
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
+  const sidebarProjection = buildSidebarProjection({
+    sessions: filteredSessions,
+    statuses: sessionStatuses,
+    agents: herdrAgents,
+    selectedCwd: selectedCwdProp ?? selectedCwd,
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -849,28 +805,33 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             No sessions found
           </div>
         )}
-        {sessionTree.map((node) => (
-          <SessionTreeItem
-            key={node.session.id}
-            node={node}
-            selectedSessionId={selectedSessionId}
-            sessionStatuses={sessionStatuses}
-            unreadSessionIds={unreadSessionIds}
-            onSelectSession={onSelectSession}
-            onRenamed={loadSessions}
-            onSessionDeleted={(id) => {
-              onSessionDeleted?.(id);
-              loadSessions();
-            }}
-            depth={0}
-          />
+        {sidebarProjection.sections.map((section) => (
+          <div key={section.key}>
+            <SessionSectionHeader label={section.label} count={section.sessionCount} tone={section.key} />
+            {section.nodes.map((node) => (
+              <SessionTreeItem
+                key={node.session.id}
+                node={node}
+                selectedSessionId={selectedSessionId}
+                sessionStatuses={sessionStatuses}
+                unreadSessionIds={unreadSessionIds}
+                onSelectSession={onSelectSession}
+                onRenamed={loadSessions}
+                onSessionDeleted={(id) => {
+                  onSessionDeleted?.(id);
+                  loadSessions();
+                }}
+                depth={0}
+              />
+            ))}
+          </div>
         ))}
       </div>
 
-      <HerdrAgentsPanel
+      <RuntimeDiagnosticsPanel
         open={herdrPanelOpen}
         health={herdrHealth}
-        agents={herdrAgents}
+        agents={sidebarProjection.runtimeDiagnostics}
         onToggle={() => setHerdrPanelOpen((v) => !v)}
         onFocusAgent={handleHerdrAgentFocus}
       />
@@ -966,7 +927,37 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
-function HerdrAgentsPanel({
+function SessionSectionHeader({
+  label,
+  count,
+  tone,
+}: {
+  label: string;
+  count: number;
+  tone: "attention" | "active" | "recent";
+}) {
+  const color = tone === "attention" ? "#d97706" : tone === "active" ? "var(--accent)" : "var(--text-dim)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "8px 12px 4px",
+        color,
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+      }}
+    >
+      <span>{label}</span>
+      <span style={{ fontWeight: 600, letterSpacing: 0 }}>{count}</span>
+    </div>
+  );
+}
+
+function RuntimeDiagnosticsPanel({
   open,
   health,
   agents,
@@ -981,7 +972,9 @@ function HerdrAgentsPanel({
 }) {
   const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
   const [focusError, setFocusError] = useState<{ agentId: string; message: string } | null>(null);
-  const healthLabel = health === "ok" ? `${agents.length} agent${agents.length === 1 ? "" : "s"}` : health === "unavailable" ? "offline" : "error";
+  const healthLabel = health === "ok"
+    ? agents.length === 0 ? "clear" : `${agents.length} runtime${agents.length === 1 ? "" : "s"}`
+    : health === "unavailable" ? "offline" : "error";
   const healthColor = health === "ok" ? "var(--text-muted)" : health === "unavailable" ? "var(--text-dim)" : "#ef4444";
 
   const handleFocusAgent = useCallback(async (agent: HerdrAgentRuntimeStatus) => {
@@ -1001,7 +994,7 @@ function HerdrAgentsPanel({
     <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
       <button
         onClick={onToggle}
-        title={health === "ok" ? "Show Herdr agents" : "Herdr status"}
+        title={health === "ok" ? "Show runtime diagnostics" : "Runtime status"}
         style={{
           display: "flex",
           alignItems: "center",
@@ -1026,7 +1019,7 @@ function HerdrAgentsPanel({
         >
           <polyline points="3 2 7 5 3 8" />
         </svg>
-        <span style={{ flex: 1 }}>Herdr</span>
+        <span style={{ flex: 1 }}>Runtime diagnostics</span>
         <span style={{ color: healthColor, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>{healthLabel}</span>
       </button>
 
@@ -1037,7 +1030,7 @@ function HerdrAgentsPanel({
               {health === "unavailable" ? "Herdr server is not running." : "Unable to read Herdr status."}
             </div>
           ) : agents.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "3px 0 2px" }}>No Herdr agents found.</div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "3px 0 2px" }}>No unbound runtimes for this project.</div>
           ) : (
             agents.map((agent) => (
               <HerdrAgentRow
@@ -1122,7 +1115,7 @@ function SessionTreeItem({
   onSessionDeleted,
   depth,
 }: {
-  node: SessionTreeNode;
+  node: SidebarSessionTreeNode;
   selectedSessionId: string | null;
   sessionStatuses: Map<string, SessionRuntimeStatus>;
   unreadSessionIds: Set<string>;
@@ -1306,6 +1299,8 @@ function SessionItem({
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
   const isRunning = runtimeStatus?.status === "working";
   const isBlocked = runtimeStatus?.status === "blocked";
+  const activityLabel = getSessionActivityLabel(runtimeStatus, isUnread);
+  const activityColor = isBlocked ? "#d97706" : isRunning ? "var(--accent)" : "#0891b2";
   const statusTitle = isBlocked
     ? `${title} · Agent blocked${runtimeStatus?.message ? `: ${runtimeStatus.message}` : ""}`
     : isRunning
@@ -1482,9 +1477,10 @@ function SessionItem({
                 {title}
               </span>
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11 }}>
-              <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
-              <span>{session.messageCount} msgs</span>
+            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+              {activityLabel && <span style={{ color: activityColor, fontWeight: 600, whiteSpace: "nowrap" }}>{activityLabel}</span>}
+              <span title={session.modified} style={{ whiteSpace: "nowrap" }}>{formatRelativeTime(session.modified)}</span>
+              <span style={{ whiteSpace: "nowrap" }}>{session.messageCount} msgs</span>
             </div>
           </div>
 

@@ -574,8 +574,8 @@ span.linenumber {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 280px;
-    max-width: 85vw;
+    width: min(360px, 92vw);
+    max-width: 92vw;
     transition: transform 0.25s ease, box-shadow 0.25s ease;
   }
   .sidebar-container.sidebar-open {

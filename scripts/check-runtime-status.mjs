@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildSidebarProjection, getSessionActivityLabel } from "../lib/sidebar-projection.ts";
 import { mergeRuntimeStatuses } from "../lib/runtime-status/merge.ts";
 import { focusHerdrAgent, getHerdrStatusSnapshot, parseHerdrAgentList } from "../lib/runtime-status/herdr-adapter.ts";
 import { focusHerdrAgentById } from "../lib/runtime-status/herdr-focus.ts";
@@ -25,6 +26,61 @@ function herdr(overrides = {}) {
     source: "herdr",
     ...overrides,
   };
+}
+
+function sidebarSession(id, overrides = {}) {
+  return {
+    path: `/tmp/${id}.jsonl`,
+    id,
+    cwd: "/repo",
+    created: "2026-07-12T00:00:00.000Z",
+    modified: "2026-07-12T00:00:00.000Z",
+    messageCount: 1,
+    firstMessage: id,
+    ...overrides,
+  };
+}
+
+{
+  const sessions = [
+    sidebarSession("blocked"),
+    sidebarSession("parent", { modified: "2026-07-12T00:03:00.000Z" }),
+    sidebarSession("working-child", { parentSessionId: "parent", modified: "2026-07-12T00:04:00.000Z" }),
+    sidebarSession("recent", { modified: "2026-07-12T00:02:00.000Z" }),
+  ];
+  const statuses = new Map([
+    ["blocked", { sessionId: "blocked", status: "blocked", source: "herdr", herdrAgentId: "bound-agent" }],
+    ["working-child", { sessionId: "working-child", status: "working", source: "herdr", herdrAgentId: "working-agent" }],
+    ["missing-session", { sessionId: "missing-session", status: "idle", source: "herdr", herdrAgentId: "stale-binding" }],
+  ]);
+  const projection = buildSidebarProjection({
+    sessions,
+    statuses,
+    agents: [
+      herdr({ id: "bound-agent", cwd: "/repo", sessionId: "blocked" }),
+      herdr({ id: "working-agent", cwd: "/repo", sessionId: "working-child" }),
+      herdr({ id: "orphan-current-project", cwd: "/repo", linked: false, sessionId: undefined, sessionPath: undefined }),
+      herdr({ id: "stale-binding", cwd: "/repo", sessionId: "missing-session" }),
+      herdr({ id: "missing-cwd", cwd: undefined, linked: false, sessionId: undefined, sessionPath: undefined }),
+      herdr({ id: "other-project", cwd: "/other", linked: false, sessionId: undefined, sessionPath: undefined }),
+    ],
+    selectedCwd: "/repo",
+  });
+
+  assert.deepEqual(
+    projection.sections.map((section) => [section.key, section.nodes.map((node) => node.session.id)]),
+    [["attention", ["blocked"]], ["active", ["parent"]], ["recent", ["recent"]]],
+  );
+  assert.equal(projection.sections[1].nodes[0].children[0].session.id, "working-child");
+  assert.deepEqual(projection.runtimeDiagnostics.map((runtime) => runtime.id), ["orphan-current-project", "stale-binding"]);
+  assert.deepEqual(
+    buildSidebarProjection({ sessions, statuses, agents: projection.runtimeDiagnostics, selectedCwd: null }).runtimeDiagnostics,
+    [],
+    "runtime diagnostics should stay empty until a project is selected",
+  );
+  assert.equal(getSessionActivityLabel(statuses.get("blocked")), "Needs input");
+  assert.equal(getSessionActivityLabel(statuses.get("working-child")), "Working");
+  assert.equal(getSessionActivityLabel(undefined, true), "New activity");
 }
 
 {
