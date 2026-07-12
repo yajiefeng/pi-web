@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { randomUUID } from "crypto";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findBridgeRegistryForSession } from "@/lib/bridge/rpc-bridge-client";
@@ -11,6 +12,7 @@ import {
 } from "@/lib/session-reader";
 import type { SessionContext } from "@/lib/types";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { stopHerdrRuntimesForSessions } from "@/lib/runtime-status/session-lifecycle";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -256,6 +258,23 @@ export async function PATCH(
   }
 }
 
+async function stopLocalRpcSession(sessionId: string): Promise<void> {
+  const runtime = getRpcSession(sessionId);
+  if (!runtime) return;
+  if (runtime.isRunning()) await runtime.send({ type: "abort" });
+  runtime.destroy();
+}
+
+function replaceFileAtomically(filePath: string, content: string): void {
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tempPath, content, { mode: statSync(filePath).mode });
+    renameSync(tempPath, filePath);
+  } finally {
+    try { unlinkSync(tempPath); } catch { /* already renamed or never written */ }
+  }
+}
+
 // DELETE /api/sessions/[id]
 export async function DELETE(
   _req: Request,
@@ -276,29 +295,60 @@ export async function DELETE(
       if (header.type === "session") parentSessionPath = header.parentSession;
     } catch { /* ignore */ }
 
-    // Re-attach all direct children to this session's parent (cascade re-parent)
-    // Scan sibling files in the same directory
+    // Discover every durable file that will be mutated before stopping writers.
     const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-    try {
-      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && join(dir, f) !== filePath);
-      for (const file of files) {
-        const childPath = join(dir, file);
-        try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
-          if (header.type === "session" && header.parentSession === filePath) {
-            // Rewrite header with new parentSession
-            header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
-            writeFileSync(childPath, lines.join("\n"));
-          }
-        } catch { /* skip malformed */ }
+    const children: Array<{ id: string; path: string }> = [];
+    const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && join(dir, f) !== filePath);
+    for (const file of files) {
+      const childPath = join(dir, file);
+      try {
+        const header = JSON.parse(readFileSync(childPath, "utf8").split("\n")[0]) as { type?: string; id?: string; parentSession?: string };
+        if (header.type === "session" && typeof header.id === "string" && header.parentSession === filePath) {
+          children.push({ id: header.id, path: childPath });
+        }
+      } catch (error) {
+        throw new Error(`Cannot safely inspect sibling session ${childPath}: ${String(error)}`);
       }
-    } catch { /* skip if dir unreadable */ }
+    }
 
-    getRpcSession(id)?.destroy();
-    unlinkSync(filePath);
+    // Stop local writers first, then close and verify all Herdr ownership from
+    // one final snapshot immediately before the synchronous mutation phase.
+    const affectedSessions = [{ sessionId: id, sessionFile: filePath }, ...children.map((child) => ({ sessionId: child.id, sessionFile: child.path }))];
+    for (const session of affectedSessions) await stopLocalRpcSession(session.sessionId);
+    await stopHerdrRuntimesForSessions(affectedSessions);
+    for (const session of affectedSessions) {
+      if (getRpcSession(session.sessionId)?.isAlive()) {
+        throw new Error(`Local Runtime Owner reappeared during deletion: ${session.sessionId}`);
+      }
+    }
+
+    // Reread after shutdown so no writes made before the abort can be lost.
+    const rewrites = children.map((child) => {
+      const original = readFileSync(child.path, "utf8");
+      const lines = original.split("\n");
+      const header = JSON.parse(lines[0]) as { type?: string; id?: string; parentSession?: string };
+      if (header.type !== "session" || header.id !== child.id || header.parentSession !== filePath) {
+        throw new Error(`Child session changed while preparing deletion: ${child.path}`);
+      }
+      header.parentSession = parentSessionPath;
+      lines[0] = JSON.stringify(header);
+      return { path: child.path, original, updated: lines.join("\n") };
+    });
+
+    const written: typeof rewrites = [];
+    try {
+      for (const rewrite of rewrites) {
+        replaceFileAtomically(rewrite.path, rewrite.updated);
+        written.push(rewrite);
+      }
+      unlinkSync(filePath);
+    } catch (error) {
+      for (const rewrite of written.reverse()) {
+        try { replaceFileAtomically(rewrite.path, rewrite.original); } catch { /* best-effort rollback */ }
+      }
+      throw error;
+    }
+
     invalidateSessionPathCache(id);
     return NextResponse.json({ ok: true });
   } catch (error) {

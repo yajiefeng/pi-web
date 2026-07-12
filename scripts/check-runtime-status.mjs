@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { buildSidebarProjection, getSessionActivityLabel } from "../lib/sidebar-projection.ts";
+import { buildSidebarProjection, getRuntimeDiagnosticLabel, getSessionActivityLabel } from "../lib/sidebar-projection.ts";
+import { stopHerdrRuntimeForSession } from "../lib/runtime-status/session-lifecycle.ts";
 import { mergeRuntimeStatuses } from "../lib/runtime-status/merge.ts";
 import { focusHerdrAgent, getHerdrStatusSnapshot, parseHerdrAgentList } from "../lib/runtime-status/herdr-adapter.ts";
 import { focusHerdrAgentById } from "../lib/runtime-status/herdr-focus.ts";
@@ -26,6 +27,89 @@ function herdr(overrides = {}) {
     source: "herdr",
     ...overrides,
   };
+}
+
+{
+  const closed = [];
+  const snapshots = [
+    {
+      health: "ok",
+      agents: [
+        herdr(),
+        herdr({ id: "agent-2", sessionId: undefined }),
+        herdr({ id: "unrelated", sessionId: "other", sessionPath: "/tmp/other.jsonl" }),
+      ],
+    },
+    { health: "ok", agents: [] },
+  ];
+  const stopped = await stopHerdrRuntimeForSession(
+    { sessionId: "session-1", sessionFile: "/tmp/session-1.jsonl" },
+    {
+      getSnapshot: async () => snapshots.shift(),
+      close: async (agent) => { closed.push(agent.id); },
+    },
+  );
+  assert.equal(stopped, true);
+  assert.deepEqual(closed, ["agent-1", "agent-2"], "every runtime bound to the session should stop");
+
+  const pathSnapshots = [
+    { health: "ok", agents: [herdr({ sessionId: undefined })] },
+    { health: "ok", agents: [] },
+  ];
+  const stoppedByPath = await stopHerdrRuntimeForSession(
+    { sessionId: "missing-id", sessionFile: "/tmp/session-1.jsonl" },
+    {
+      getSnapshot: async () => pathSnapshots.shift(),
+      close: async (agent) => { closed.push(agent.id); },
+    },
+  );
+  assert.equal(stoppedByPath, true);
+  assert.deepEqual(closed, ["agent-1", "agent-2", "agent-1"]);
+
+  await assert.rejects(
+    stopHerdrRuntimeForSession(
+      { sessionId: "session-1", sessionFile: "/tmp/session-1.jsonl" },
+      {
+        getSnapshot: async () => ({
+          health: "ok",
+          agents: [herdr({ sessionPath: "/tmp/conflicting-session.jsonl" })],
+        }),
+        close: async () => { throw new Error("conflicting binding must not be closed"); },
+      },
+    ),
+    /conflicting Herdr binding/i,
+  );
+
+  await assert.rejects(
+    stopHerdrRuntimeForSession(
+      { sessionId: "session-1", sessionFile: "/tmp/session-1.jsonl" },
+      {
+        getSnapshot: async () => ({ health: "unavailable", agents: [], error: "offline" }),
+        close: async () => { throw new Error("must not close without a healthy snapshot"); },
+      },
+    ),
+    /cannot verify Herdr Runtime Owners.*unavailable.*offline/i,
+  );
+
+  await assert.rejects(
+    stopHerdrRuntimeForSession(
+      { sessionId: "session-1", sessionFile: "/tmp/session-1.jsonl" },
+      {
+        getSnapshot: async () => ({ health: "ok", agents: [herdr()] }),
+        close: async () => {},
+      },
+    ),
+    /still bound after shutdown.*agent-1/i,
+  );
+
+  const absent = await stopHerdrRuntimeForSession(
+    { sessionId: "absent", sessionFile: "/tmp/absent.jsonl" },
+    {
+      getSnapshot: async () => ({ health: "ok", agents: [herdr()] }),
+      close: async () => { throw new Error("must not close unrelated runtime"); },
+    },
+  );
+  assert.equal(absent, false);
 }
 
 function sidebarSession(id, overrides = {}) {
@@ -63,6 +147,7 @@ function sidebarSession(id, overrides = {}) {
       herdr({ id: "stale-binding", cwd: "/repo", sessionId: "missing-session" }),
       herdr({ id: "missing-cwd", cwd: undefined, linked: false, sessionId: undefined, sessionPath: undefined }),
       herdr({ id: "other-project", cwd: "/other", linked: false, sessionId: undefined, sessionPath: undefined }),
+      herdr({ id: "completed-runtime", cwd: "/repo", status: "done", linked: false, sessionId: undefined, sessionPath: undefined }),
     ],
     selectedCwd: "/repo",
   });
@@ -78,6 +163,8 @@ function sidebarSession(id, overrides = {}) {
     [],
     "runtime diagnostics should stay empty until a project is selected",
   );
+  assert.equal(getRuntimeDiagnosticLabel(projection.runtimeDiagnostics[0]), "Unbound runtime");
+  assert.equal(getRuntimeDiagnosticLabel(projection.runtimeDiagnostics[1]), "Stale binding");
   assert.equal(getSessionActivityLabel(statuses.get("blocked")), "Needs input");
   assert.equal(getSessionActivityLabel(statuses.get("working-child")), "Working");
   assert.equal(getSessionActivityLabel(undefined, true), "New activity");

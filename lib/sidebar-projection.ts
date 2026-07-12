@@ -32,6 +32,10 @@ const SECTION_PRIORITY: Record<SidebarSectionKey, number> = {
   attention: 2,
 };
 
+export function getRuntimeDiagnosticLabel(agent: HerdrAgentRuntimeStatus): string {
+  return agent.linked ? "Stale binding" : "Unbound runtime";
+}
+
 export function getSessionActivityLabel(
   status: SessionRuntimeStatus | undefined,
   isUnread = false,
@@ -80,7 +84,7 @@ export function buildSidebarProjection(input: {
   );
   const runtimeDiagnostics = input.selectedCwd
     ? input.agents.filter((agent) => {
-        if (representedAgentIds.has(agent.id)) return false;
+        if (agent.status === "done" || representedAgentIds.has(agent.id)) return false;
         return agent.cwd === input.selectedCwd;
       })
     : [];

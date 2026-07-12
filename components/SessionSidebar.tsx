@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { HerdrAgentRuntimeStatus, HerdrHealth, SessionRuntimeStatus, RuntimeStatusSnapshot } from "@/lib/runtime-status/types";
-import { buildSidebarProjection, getSessionActivityLabel, type SidebarSessionTreeNode } from "@/lib/sidebar-projection";
+import { buildSidebarProjection, getRuntimeDiagnosticLabel, getSessionActivityLabel, type SidebarSessionTreeNode } from "@/lib/sidebar-projection";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer } from "./FileExplorer";
 
@@ -1059,14 +1059,17 @@ function HerdrAgentRow({
   error?: string;
   onFocus: () => void;
 }) {
-  const color = agent.status === "working"
-    ? "var(--accent)"
-    : agent.status === "blocked"
-      ? "#d97706"
-      : agent.status === "idle"
-        ? "#10b981"
-        : "var(--text-dim)";
-  const linkedText = agent.sessionId ? `linked ${agent.sessionId.slice(0, 8)}` : agent.sessionPath ? "linked by path" : "unlinked";
+  const diagnosticLabel = getRuntimeDiagnosticLabel(agent);
+  const color = agent.linked
+    ? "#d97706"
+    : agent.status === "working"
+      ? "var(--accent)"
+      : agent.status === "blocked"
+        ? "#d97706"
+        : agent.status === "idle"
+          ? "#10b981"
+          : "var(--text-dim)";
+  const statusLabel = agent.linked ? "stale" : agent.status;
 
   return (
     <button
@@ -1096,10 +1099,10 @@ function HerdrAgentRow({
         {agent.label}
       </span>
       <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-        {pending ? "focus…" : agent.status}
+        {pending ? "focus…" : statusLabel}
       </span>
       <span style={{ gridColumn: "2 / 4", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: error ? "#ef4444" : "var(--text-dim)", fontSize: 11 }}>
-        {error ?? `${linkedText}${agent.cwd ? ` · ${agent.cwd}` : ""}`}
+        {error ?? `${diagnosticLabel}${agent.cwd ? ` · ${agent.cwd}` : ""}`}
       </span>
     </button>
   );
@@ -1342,7 +1345,8 @@ function SessionItem({
     setConfirmDelete(false);
     setDeleting(true);
     try {
-      await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Session deletion failed with HTTP ${response.status}`);
       onDeleted?.(session.id);
     } catch {
       setDeleting(false);

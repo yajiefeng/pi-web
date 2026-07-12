@@ -14,6 +14,7 @@ const DEFAULT_BASE_DIR = path.join(os.homedir(), ".pi", "agent", "pi-web-rpc-bri
 const DEFAULT_SOURCE = "pi-web-rpc-bridge";
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 const COMPACT_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+const CHILD_SHUTDOWN_TIMEOUT_MS = 2_000;
 
 function usage() {
   return `Usage: pi-web-rpc-bridge [options] [-- <pi-rpc-command...>]
@@ -110,6 +111,50 @@ function serializeJsonLine(value) {
   return JSON.stringify(value) + "\n";
 }
 
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pruneStaleBridgeArtifacts(registryDir, socketDir) {
+  const safeSocketDir = path.resolve(socketDir);
+  for (const filename of fs.readdirSync(registryDir)) {
+    if (!filename.endsWith(".json")) continue;
+    const registryPath = path.join(registryDir, filename);
+    let registry;
+    try {
+      registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+    } catch {
+      // An unreadable entry may belong to a concurrently starting or older
+      // bridge. Preserve it because its owner cannot be proven dead.
+      continue;
+    }
+    if (isProcessAlive(registry.pid)) continue;
+
+    if (typeof registry.socketPath === "string" && path.dirname(path.resolve(registry.socketPath)) === safeSocketDir) {
+      try {
+        fs.unlinkSync(registry.socketPath);
+      } catch {}
+    }
+    try {
+      fs.unlinkSync(registryPath);
+    } catch {}
+  }
+
+  for (const filename of fs.readdirSync(socketDir)) {
+    const match = filename.match(/^bridge-(\d+)\.sock$/);
+    if (!match || isProcessAlive(Number(match[1]))) continue;
+    try {
+      fs.unlinkSync(path.join(socketDir, filename));
+    } catch {}
+  }
+}
+
 function normalizeComparablePath(value) {
   if (typeof value !== "string" || value.length === 0) return undefined;
   return path.resolve(value);
@@ -129,6 +174,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   mkdirPrivate(options.socketDir);
   mkdirPrivate(options.registryDir);
+  pruneStaleBridgeArtifacts(options.registryDir, options.socketDir);
 
   const token = options.token || crypto.randomBytes(24).toString("base64url");
   const childCommand = options.piArgv[0];
@@ -138,6 +184,7 @@ async function main() {
   let currentSession;
   let registryPath;
   const socketPath = path.join(options.socketDir, `bridge-${process.pid}.sock`);
+  const connections = new Set();
   const subscribers = new Set();
   const capabilities = [
     "prompt",
@@ -166,10 +213,12 @@ async function main() {
   let server;
   let childExited = false;
   let shuttingDown = false;
+  let shutdownPromise;
   let rpcSeq = 0;
   let herdrSeq = 0;
   let lastReportedState;
   const pending = new Map();
+  const pendingHerdrReports = new Set();
 
   try {
     fs.unlinkSync(socketPath);
@@ -187,24 +236,35 @@ async function main() {
     process.stderr.write(`[pi-rpc] ${chunk}`);
   });
 
-  child.on("exit", (code, signal) => {
+  let resolveChildExit;
+  const childExitPromise = new Promise((resolve) => {
+    resolveChildExit = resolve;
+  });
+  child.on("error", (error) => {
+    process.stderr.write(`[pi-web-rpc-bridge] Failed to run Pi RPC child: ${error.message}\n`);
+  });
+
+  child.on("close", (code, signal) => {
     childExited = true;
+    resolveChildExit();
+    const message = `Pi RPC child exited${signal ? ` with signal ${signal}` : ` with code ${code}`}`;
     for (const { reject, timeout } of pending.values()) {
       clearTimeout(timeout);
-      reject(new Error(`Pi RPC child exited${signal ? ` with signal ${signal}` : ` with code ${code}`}`));
+      reject(new Error(message));
     }
     pending.clear();
     if (!shuttingDown) {
-      reportHerdr("blocked", `Pi RPC child exited${signal ? ` with signal ${signal}` : ` with code ${code}`}`);
+      process.stderr.write(`[pi-web-rpc-bridge] ${message}\n`);
+      void shutdown(undefined, 1);
     }
   });
 
   function reportHerdr(state, message) {
-    if (!options.herdrReport) return;
+    if (shuttingDown || !options.herdrReport) return Promise.resolve();
     const paneId = process.env.HERDR_PANE_ID;
-    if (!paneId) return;
+    if (!paneId) return Promise.resolve();
     if (lastReportedState === `${state}:${message || ""}:${currentSession?.sessionId || ""}:${currentSession?.sessionFile || ""}`) {
-      return;
+      return Promise.resolve();
     }
     lastReportedState = `${state}:${message || ""}:${currentSession?.sessionId || ""}:${currentSession?.sessionFile || ""}`;
 
@@ -225,10 +285,83 @@ async function main() {
     if (currentSession?.sessionId) args.push("--agent-session-id", currentSession.sessionId);
     if (currentSession?.sessionFile) args.push("--agent-session-path", currentSession.sessionFile);
 
-    execFile(options.herdrCommand, args, { timeout: 5000 }, (error) => {
-      if (error) process.stderr.write(`[pi-web-rpc-bridge] Herdr report failed: ${error.message}\n`);
+    const report = new Promise((resolve) => {
+      execFile(options.herdrCommand, args, { timeout: 5000 }, (error) => {
+        if (error) process.stderr.write(`[pi-web-rpc-bridge] Herdr report failed: ${error.message}\n`);
+        resolve();
+      });
+    });
+    pendingHerdrReports.add(report);
+    void report.finally(() => pendingHerdrReports.delete(report));
+    return report;
+  }
+
+  function releaseHerdr() {
+    if (!options.herdrReport) return Promise.resolve();
+    const paneId = process.env.HERDR_PANE_ID;
+    if (!paneId) return Promise.resolve();
+    const args = [
+      "pane",
+      "release-agent",
+      paneId,
+      "--source",
+      options.herdrSource,
+      "--agent",
+      "pi",
+      "--seq",
+      String(++herdrSeq),
+    ];
+    return new Promise((resolve) => {
+      execFile(options.herdrCommand, args, { timeout: 5000 }, (error) => {
+        if (error) process.stderr.write(`[pi-web-rpc-bridge] Herdr release failed: ${error.message}\n`);
+        resolve();
+      });
     });
   }
+
+  function waitForChildExit(timeoutMs) {
+    if (childExited) return Promise.resolve(true);
+    return Promise.race([
+      childExitPromise.then(() => true),
+      new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), timeoutMs);
+        timeout.unref();
+      }),
+    ]);
+  }
+
+  function shutdown(signal, exitCode = 0) {
+    if (shutdownPromise) return shutdownPromise;
+    shuttingDown = true;
+    shutdownPromise = (async () => {
+      const serverClosed = server?.listening
+        ? new Promise((resolve) => server.close(resolve))
+        : Promise.resolve();
+      for (const connection of connections) connection.destroy();
+      await serverClosed;
+      if (!childExited) {
+        child.kill(signal || "SIGTERM");
+        if (!(await waitForChildExit(CHILD_SHUTDOWN_TIMEOUT_MS))) {
+          child.kill("SIGKILL");
+          await childExitPromise;
+        }
+      }
+      await Promise.all(pendingHerdrReports);
+      await releaseHerdr();
+      for (const artifact of [socketPath, registryPath]) {
+        if (!artifact) continue;
+        try {
+          fs.unlinkSync(artifact);
+        } catch {}
+      }
+      process.exitCode = exitCode;
+      setTimeout(() => process.exit(exitCode), 100).unref();
+    })();
+    return shutdownPromise;
+  }
+
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 
   function broadcastBridgeEvent(event) {
     const line = serializeJsonLine(event);
@@ -313,31 +446,10 @@ async function main() {
     return currentSession;
   }
 
-  const stateResponse = await sendRpcCommand({ type: "get_state" }, 10_000);
+  try {
+    const stateResponse = await sendRpcCommand({ type: "get_state" }, 10_000);
   if (!stateResponse.success) throw new Error(`Pi RPC get_state failed: ${stateResponse.error || "unknown error"}`);
   refreshSessionFromState(stateResponse.data);
-
-  registryPath = path.join(options.registryDir, `${sanitizeFilePart(currentSession.sessionId || path.basename(currentSession.sessionFile))}.json`);
-  writeJsonAtomic(registryPath, {
-    version: 1,
-    pid: process.pid,
-    socketPath,
-    token,
-    cwd: currentSession.cwd,
-    sessionId: currentSession.sessionId,
-    sessionFile: currentSession.sessionFile,
-    protocol: "pi-web-rpc-bridge",
-    protocolVersion: 2,
-    capabilities,
-    child: {
-      command: childCommand,
-      args: childArgs,
-      pid: child.pid,
-    },
-    updatedAt: new Date().toISOString(),
-  });
-
-  reportHerdr(currentSession.isStreaming || currentSession.isCompacting ? "working" : "idle");
 
   function validateBridgeRequest(request) {
     const id = typeof request?.id === "string" ? request.id : undefined;
@@ -429,9 +541,26 @@ async function main() {
   }
 
   server = net.createServer((socket) => {
+    if (shuttingDown) {
+      socket.destroy();
+      return;
+    }
+    connections.add(socket);
+    socket.on("close", () => {
+      connections.delete(socket);
+      subscribers.delete(socket);
+    });
+    socket.on("error", () => {
+      connections.delete(socket);
+      subscribers.delete(socket);
+    });
     socket.setEncoding("utf8");
     let buffer = "";
     socket.on("data", (chunk) => {
+      if (shuttingDown) {
+        socket.destroy();
+        return;
+      }
       buffer += chunk;
       while (true) {
         const newlineIndex = buffer.indexOf("\n");
@@ -457,8 +586,6 @@ async function main() {
             sessionId: currentSession.sessionId,
             sessionFile: currentSession.sessionFile,
           }));
-          socket.on("close", () => subscribers.delete(socket));
-          socket.on("error", () => subscribers.delete(socket));
           continue;
         }
         void (validation.ok ? handleBridgeRequest(request) : Promise.resolve(validation.response)).then((response) => {
@@ -481,23 +608,34 @@ async function main() {
     });
   });
 
+  registryPath = path.join(options.registryDir, `${sanitizeFilePart(currentSession.sessionId || path.basename(currentSession.sessionFile))}.json`);
+  writeJsonAtomic(registryPath, {
+    version: 1,
+    pid: process.pid,
+    socketPath,
+    token,
+    cwd: currentSession.cwd,
+    sessionId: currentSession.sessionId,
+    sessionFile: currentSession.sessionFile,
+    protocol: "pi-web-rpc-bridge",
+    protocolVersion: 2,
+    capabilities,
+    child: {
+      command: childCommand,
+      args: childArgs,
+      pid: child.pid,
+    },
+    updatedAt: new Date().toISOString(),
+  });
+  reportHerdr(currentSession.isStreaming || currentSession.isCompacting ? "working" : "idle");
+
   process.stderr.write(`[pi-web-rpc-bridge] Ready for session ${currentSession.sessionId || currentSession.sessionFile} at ${socketPath}\n`);
 
-  function shutdown(signal) {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    if (server) server.close(() => {});
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {}
-    if (child && !childExited) child.kill(signal || "SIGTERM");
-    setTimeout(() => process.exit(0), 100).unref();
+    await new Promise(() => {});
+  } catch (error) {
+    await shutdown("SIGTERM", 1);
+    throw error;
   }
-
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
-
-  await new Promise(() => {});
 }
 
 main().catch((error) => {

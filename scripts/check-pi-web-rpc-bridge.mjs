@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
@@ -14,6 +14,33 @@ const socketDir = join(tmp, "sockets");
 const registryDir = join(tmp, "registry");
 const fakePi = join(tmp, "fake-pi-rpc.mjs");
 const fakeLog = join(tmp, "fake-pi-commands.jsonl");
+const fakeHerdr = join(tmp, "fake-herdr.mjs");
+const fakeHerdrLog = join(tmp, "fake-herdr-commands.jsonl");
+const fakeLifecycleLog = join(tmp, "fake-lifecycle.jsonl");
+const staleSocket = join(socketDir, "stale.sock");
+const staleRegistry = join(registryDir, "stale.json");
+const malformedRegistry = join(registryDir, "malformed.json");
+const orphanSocket = join(socketDir, "bridge-2147483646.sock");
+mkdirSync(socketDir, { recursive: true });
+mkdirSync(registryDir, { recursive: true });
+writeFileSync(staleSocket, "stale");
+writeFileSync(orphanSocket, "orphan");
+writeFileSync(staleRegistry, JSON.stringify({ pid: 2_147_483_647, socketPath: staleSocket }));
+writeFileSync(malformedRegistry, "not-json");
+
+writeFileSync(fakeHerdr, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.FAKE_HERDR_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("report-agent") && process.env.FAKE_TRACK_HERDR_REPORTS === "1") {
+  await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_HERDR_REPORT_DELAY_MS || 0)));
+  appendFileSync(process.env.FAKE_LIFECYCLE_LOG, JSON.stringify("report-completed") + "\\n");
+}
+if (args.includes("release-agent")) {
+  appendFileSync(process.env.FAKE_LIFECYCLE_LOG, JSON.stringify("authority-released") + "\\n");
+}
+`);
+chmodSync(fakeHerdr, 0o755);
 
 writeFileSync(fakePi, `
 import { appendFileSync } from "node:fs";
@@ -24,6 +51,15 @@ const sessionFile = "${join(tmp, "bridge-test-session.jsonl").replaceAll("\\", "
 const logPath = process.env.FAKE_PI_LOG;
 const rl = readline.createInterface({ input: process.stdin });
 
+process.on("SIGTERM", () => {
+  if (process.env.FAKE_PI_IGNORE_SIGTERM === "1") {
+    appendFileSync(process.env.FAKE_LIFECYCLE_LOG, JSON.stringify("term-ignored") + "\\n");
+    return;
+  }
+  appendFileSync(process.env.FAKE_LIFECYCLE_LOG, JSON.stringify("child-stopped") + "\\n");
+  process.exit(0);
+});
+
 function send(value) {
   process.stdout.write(JSON.stringify(value) + "\\n");
 }
@@ -33,6 +69,10 @@ rl.on("line", (line) => {
   if (logPath) appendFileSync(logPath, JSON.stringify(command) + "\\n");
 
   if (command.type === "get_state") {
+    if (process.env.FAKE_PI_FAIL_STATE === "1") {
+      send({ id: command.id, type: "response", command: "get_state", success: false, error: "forced get_state failure" });
+      return;
+    }
     send({
       id: command.id,
       type: "response",
@@ -51,6 +91,7 @@ rl.on("line", (line) => {
         pendingMessageCount: 0
       }
     });
+    if (process.env.FAKE_PI_EXIT_AFTER_STATE === "1") setTimeout(() => process.exit(7), 50);
     return;
   }
 
@@ -97,6 +138,46 @@ async function waitFor(description, fn, timeoutMs = 5000) {
   throw new Error(`Timed out waiting for ${description}${lastError ? `: ${lastError.message}` : ""}`);
 }
 
+function waitForProcessExit(child, description, timeoutMs = 15_000) {
+  if (child.exitCode !== null) return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${description}`)), timeoutMs);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+}
+
+function startLifecycleBridge(name, extraEnv = {}) {
+  const lifecycleSocketDir = join(tmp, `${name}-sockets`);
+  const lifecycleRegistryDir = join(tmp, `${name}-registry`);
+  const lifecycleLog = join(tmp, `${name}-lifecycle.jsonl`);
+  const child = spawn(process.execPath, [
+    "bin/pi-web-rpc-bridge.js",
+    "--socket-dir", lifecycleSocketDir,
+    "--registry-dir", lifecycleRegistryDir,
+    "--herdr-command", fakeHerdr,
+    "--",
+    process.execPath,
+    fakePi,
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      FAKE_PI_LOG: join(tmp, `${name}-pi.jsonl`),
+      FAKE_HERDR_LOG: join(tmp, `${name}-herdr.jsonl`),
+      FAKE_LIFECYCLE_LOG: lifecycleLog,
+      HERDR_PANE_ID: `${name}-pane`,
+      ...extraEnv,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  return { child, lifecycleSocketDir, lifecycleRegistryDir, lifecycleLog, getStderr: () => stderr };
+}
+
 function sendBridgeRequest(socketPath, request) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
@@ -141,13 +222,19 @@ const bridge = spawn(process.execPath, [
   "bin/pi-web-rpc-bridge.js",
   "--socket-dir", socketDir,
   "--registry-dir", registryDir,
-  "--no-herdr-report",
+  "--herdr-command", fakeHerdr,
   "--",
   process.execPath,
   fakePi,
 ], {
   cwd: process.cwd(),
-  env: { ...process.env, FAKE_PI_LOG: fakeLog },
+  env: {
+    ...process.env,
+    FAKE_PI_LOG: fakeLog,
+    FAKE_HERDR_LOG: fakeHerdrLog,
+    FAKE_LIFECYCLE_LOG: fakeLifecycleLog,
+    HERDR_PANE_ID: "test-pane",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
@@ -160,12 +247,16 @@ bridge.on("exit", () => { bridgeExited = true; });
 
 try {
   const registryPath = await waitFor("bridge registry", () => {
-    const files = readdirSync(registryDir);
-    assert.equal(files.length, 1);
-    return join(registryDir, files[0]);
+    if (existsSync(staleRegistry) || existsSync(orphanSocket)) return null;
+    const files = readdirSync(registryDir).filter((file) => file.endsWith(".json") && file !== "malformed.json");
+    return files.length === 1 ? join(registryDir, files[0]) : null;
   });
 
   const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+  assert.equal(existsSync(staleRegistry), false, "bridge startup should prune dead registry entries");
+  assert.equal(existsSync(staleSocket), false, "bridge startup should prune sockets owned by dead registry entries");
+  assert.equal(existsSync(malformedRegistry), true, "bridge startup should preserve entries whose owner cannot be proven dead");
+  assert.equal(existsSync(orphanSocket), false, "bridge startup should prune orphan sockets whose owning PID is dead");
   assert.equal(registry.version, 1);
   assert.equal(registry.protocolVersion, 2);
   assert.equal(registry.sessionId, "bridge-test-session");
@@ -274,6 +365,60 @@ try {
   assert.ok(fakeCommands.some((command) => command.type === "compact"), "compact should forward to Pi RPC");
   assert.ok(fakeCommands.some((command) => command.type === "get_commands"), "get_commands should forward to Pi RPC");
   assert.ok(fakeCommands.some((command) => command.type === "extension_ui_response"), "extension UI responses should forward to Pi RPC");
+
+  bridge.kill("SIGTERM");
+  await new Promise((resolve) => bridge.once("exit", resolve));
+  const herdrCommands = await waitFor("Herdr authority release", () => {
+    const commands = readFileSync(fakeHerdrLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    return commands.some((args) => args.includes("release-agent")) ? commands : null;
+  });
+  assert.ok(herdrCommands.some((args) => args.includes("release-agent")), "bridge shutdown should release its Herdr agent authority");
+  const lifecycleEvents = readFileSync(fakeLifecycleLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(lifecycleEvents, ["child-stopped", "authority-released"], "the Pi writer must stop before Herdr authority is released");
+  assert.equal(existsSync(registryPath), false, "bridge shutdown should remove its registry entry");
+  assert.equal(existsSync(registry.socketPath), false, "bridge shutdown should remove its command socket");
+
+  const failedSetup = startLifecycleBridge("f", { FAKE_PI_FAIL_STATE: "1" });
+  const failedExit = await waitForProcessExit(failedSetup.child, "failed setup bridge exit");
+  assert.equal(failedExit.code, 1, "a setup failure should exit unsuccessfully");
+  assert.deepEqual(readdirSync(failedSetup.lifecycleRegistryDir), [], "setup failure should not leave registry entries");
+  assert.deepEqual(readdirSync(failedSetup.lifecycleSocketDir), [], "setup failure should not leave sockets");
+  const failedLifecycle = readFileSync(failedSetup.lifecycleLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(failedLifecycle, ["child-stopped", "authority-released"], "setup failure should stop the writer before releasing authority");
+
+  const childFailure = startLifecycleBridge("e", { FAKE_PI_EXIT_AFTER_STATE: "1" });
+  const childFailureExit = await waitForProcessExit(childFailure.child, "unexpected child failure bridge exit");
+  assert.equal(childFailureExit.code, 1, "unexpected Pi child failure should make the bridge exit unsuccessfully");
+  assert.deepEqual(readdirSync(childFailure.lifecycleRegistryDir), [], "child failure should remove registry entries");
+  assert.deepEqual(readdirSync(childFailure.lifecycleSocketDir), [], "child failure should remove sockets");
+  const childFailureLifecycle = readFileSync(childFailure.lifecycleLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(childFailureLifecycle, ["authority-released"], "child failure should release authority after the writer exits");
+
+  const forcedShutdown = startLifecycleBridge("k", { FAKE_PI_IGNORE_SIGTERM: "1" });
+  await waitFor("forced shutdown registry", () => {
+    const files = readdirSync(forcedShutdown.lifecycleRegistryDir);
+    return files.length === 1 ? files[0] : null;
+  });
+  forcedShutdown.child.kill("SIGTERM");
+  const forcedExit = await waitForProcessExit(forcedShutdown.child, "forced bridge shutdown");
+  assert.equal(forcedExit.code, 0, `bridge should finish cleanly after escalating child shutdown:\n${forcedShutdown.getStderr()}`);
+  const forcedLifecycle = readFileSync(forcedShutdown.lifecycleLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(forcedLifecycle, ["term-ignored", "authority-released"], "bridge should release authority only after escalating an ignored TERM");
+  assert.deepEqual(readdirSync(forcedShutdown.lifecycleRegistryDir), [], "forced shutdown should remove registry entries");
+  assert.deepEqual(readdirSync(forcedShutdown.lifecycleSocketDir), [], "forced shutdown should remove sockets");
+
+  const pendingReport = startLifecycleBridge("r", {
+    FAKE_TRACK_HERDR_REPORTS: "1",
+    FAKE_HERDR_REPORT_DELAY_MS: "500",
+  });
+  await waitFor("pending report registry", () => {
+    const files = readdirSync(pendingReport.lifecycleRegistryDir);
+    return files.length === 1 ? files[0] : null;
+  });
+  pendingReport.child.kill("SIGTERM");
+  await waitForProcessExit(pendingReport.child, "pending report bridge shutdown");
+  const reportLifecycle = readFileSync(pendingReport.lifecycleLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(reportLifecycle, ["child-stopped", "report-completed", "authority-released"], "pending Herdr reports must finish before authority is released");
 
   console.log("Pi web RPC bridge checks passed");
 } catch (error) {
