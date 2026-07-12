@@ -267,26 +267,58 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [unreadSessionIds]);
 
   useEffect(() => {
-    // Live runtime status via SSE. The server combines pi-web RPC state with
-    // optional Herdr agent/pane state and pushes a full status snapshot.
+    // Live runtime status via SSE. Poll the snapshot while SSE is recovering so
+    // a server restart cannot leave the sidebar on a stale running/idle state.
     const source = new EventSource("/api/runtime/status/events");
+    let recoveryTimer: ReturnType<typeof setInterval> | null = null;
+    let updateGeneration = 0;
+
+    const applyRuntimeSnapshot = (snapshot: RuntimeStatusSnapshot) => {
+      sseAuthoritativeRef.current = true;
+      setSessionStatuses(new Map(Object.entries(snapshot.sessions)));
+      setHerdrAgents(snapshot.herdrAgents);
+      setHerdrHealth(snapshot.health.herdr);
+    };
+    const refreshRuntimeSnapshot = async () => {
+      const generation = ++updateGeneration;
+      try {
+        const response = await fetch("/api/runtime/status");
+        if (!response.ok || generation !== updateGeneration) return;
+        const snapshot = await response.json() as RuntimeStatusSnapshot;
+        if (generation === updateGeneration) applyRuntimeSnapshot(snapshot);
+      } catch {
+        // Keep the last snapshot until the server is reachable again.
+      }
+    };
+    const stopRecoveryPolling = () => {
+      if (!recoveryTimer) return;
+      clearInterval(recoveryTimer);
+      recoveryTimer = null;
+    };
 
     source.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data) as { type?: string; snapshot?: RuntimeStatusSnapshot };
         if (data.type === "runtime_status" && data.snapshot) {
-          sseAuthoritativeRef.current = true;
-          setSessionStatuses(new Map(Object.entries(data.snapshot.sessions)));
-          setHerdrAgents(data.snapshot.herdrAgents);
-          setHerdrHealth(data.snapshot.health.herdr);
+          updateGeneration += 1;
+          stopRecoveryPolling();
+          applyRuntimeSnapshot(data.snapshot);
         }
       } catch {
         // ignore malformed frames
       }
     };
 
-    // On error EventSource auto-reconnects; keep the last known state meanwhile.
-    return () => source.close();
+    source.onerror = () => {
+      void refreshRuntimeSnapshot();
+      if (!recoveryTimer) recoveryTimer = setInterval(() => void refreshRuntimeSnapshot(), 2000);
+    };
+
+    return () => {
+      updateGeneration += 1;
+      stopRecoveryPolling();
+      source.close();
+    };
   }, []);
 
   useEffect(() => {

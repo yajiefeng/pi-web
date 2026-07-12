@@ -294,6 +294,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
+  const waitForPromptSettlementRef = useRef<((sid: string, runId?: number) => Promise<void>) | null>(null);
+  const eventReconciliationEnabledRef = useRef(false);
+  const eventReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollToUserRef = useRef(false);
@@ -497,7 +500,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [ensureNewSession]);
 
-  const connectEvents = useCallback((sid: string): Promise<void> => {
+  const connectEvents = useCallback((sid: string, options: { reconcile?: boolean } = {}): Promise<void> => {
+    if (eventReconnectTimerRef.current) {
+      clearTimeout(eventReconnectTimerRef.current);
+      eventReconnectTimerRef.current = null;
+    }
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -518,7 +525,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       es.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as AgentEvent;
-          if (event.type === "connected") settle();
+          if (event.type === "connected") {
+            settle();
+            if (options.reconcile) {
+              void loadSession(sid);
+              void waitForPromptSettlementRef.current?.(sid, promptRunIdRef.current);
+            }
+          }
           handleAgentEventRef.current?.(event);
         } catch {
           // ignore
@@ -529,13 +542,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (eventSourceRef.current === es && agentRunningRef.current) {
           es.close();
           eventSourceRef.current = null;
-          setTimeout(() => {
-            if (agentRunningRef.current) void connectEvents(sid);
+          eventReconnectTimerRef.current = setTimeout(() => {
+            eventReconnectTimerRef.current = null;
+            if (agentRunningRef.current) {
+              void connectEvents(sid, { reconcile: options.reconcile || eventReconciliationEnabledRef.current });
+            }
           }, 1000);
         }
       };
     });
-  }, []);
+  }, [loadSession]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -650,12 +666,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, opts.chatInputRef]);
 
   const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId?: number) => {
+    if (runId !== undefined && promptRunIdRef.current !== runId) return;
     try {
       if (sid) await loadSession(sid);
     } finally {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       if (!agentRunningRef.current) return;
       agentRunningRef.current = false;
+      eventReconciliationEnabledRef.current = false;
       setAgentRunning(false);
       setAgentPhase(null);
       setRetryInfo(null);
@@ -686,6 +704,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await delay(PROMPT_SETTLE_POLL_MS);
     }
   }, [finishPromptWithoutStream]);
+  waitForPromptSettlementRef.current = waitForPromptSettlement;
 
   useEffect(() => {
     agentRunningRef.current = agentRunning;
@@ -695,12 +714,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     switch (event.type) {
       case "agent_start":
         agentRunningRef.current = true;
+        eventReconciliationEnabledRef.current = true;
         setAgentRunning(true);
         setAgentPhase({ kind: "waiting_model" });
         dispatch({ type: "start" });
         break;
       case "agent_end":
         agentRunningRef.current = false;
+        eventReconciliationEnabledRef.current = false;
         setAgentRunning(false);
         setAgentPhase(null);
         setRetryInfo(null);
@@ -821,6 +842,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setMessages((prev) => [...prev, userMsg]);
     promptRunIdRef.current = promptRunId;
     agentRunningRef.current = true;
+    eventReconciliationEnabledRef.current = false;
     setAgentRunning(true);
     setAgentPhase(isSlashCommandPrompt ? { kind: "running_command" } : { kind: "waiting_model" });
     dispatch({ type: "start" });
@@ -885,12 +907,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(piImages?.length ? { images: piImages } : {}),
         });
       }
+      if (sentSessionId) eventReconciliationEnabledRef.current = true;
       if (isSlashCommandPrompt && sentSessionId) {
         void waitForPromptSettlement(sentSessionId, promptRunId);
       }
     } catch (e) {
       console.error("Failed to send message:", e);
       agentRunningRef.current = false;
+      eventReconciliationEnabledRef.current = false;
       setAgentRunning(false);
       setAgentPhase(null);
       dispatch({ type: "end" });
@@ -1187,13 +1211,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           loadTools(session.id);
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
             agentRunningRef.current = true;
+            eventReconciliationEnabledRef.current = true;
             setAgentRunning(true);
             setAgentPhase(agentState.state.isStreaming ? { kind: "waiting_model" } : { kind: "running_command" });
             dispatch({ type: "start" });
-            void connectEvents(session.id);
-            if (!agentState.state.isStreaming && agentState.state.isPromptRunning) {
-              void waitForPromptSettlement(session.id);
-            }
+            void connectEvents(session.id, { reconcile: true });
           }
         }
         if (agentState?.state) {
@@ -1209,6 +1231,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => {
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
+      if (eventReconnectTimerRef.current) clearTimeout(eventReconnectTimerRef.current);
+      eventReconnectTimerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
